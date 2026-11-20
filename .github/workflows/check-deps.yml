@@ -1,0 +1,38 @@
+# 每天检查 KernelSU-Next、SUSFS、管理器有没有需要跟进的更新，有就开 Issue 提醒（GitHub 会发邮件）。
+# 只通知、不改代码，升级仍按 KERNELSU.md 手动做。具体检查什么见 ci/check_deps.sh。
+#
+# - KernelSU-Next legacy 有新提交 → Issue（标出要不要一起更新管理器），并触发 build-ksu.yml
+#   试编译（不发布），结果回复到 Issue
+# - susfs4ksu kernel-4.14 有新提交 → Issue
+# - 管理器要求的最低内核版本高于当前内核 → Issue
+#
+# 同一个版本只提醒一次；需要仓库打开 Issues（Settings → General → Features）。
+# 定时任务只在默认分支上运行。
+name: Check KSU / SUSFS updates
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 19 * * *' # 每天北京时间 03:30
+
+permissions:
+  contents: read
+  issues: write  # 开 Issue
+  actions: write # 触发试编译
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KSU_BRANCH: lineage-24.0-ksu
+    steps:
+      # 只需要 submodule 指向的提交和 ci/build.sh，不用拉 submodule 本身
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.KSU_BRANCH }}
+
+      - name: 检查更新
+        run: ci/check_deps.sh

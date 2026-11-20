@@ -7,6 +7,7 @@
 | `build.sh` | 编译内核 + ksu_susfs，打包 AnyKernel3 zip（云端和本地通用） |
 | `device_config` | 手机上 LineageOS 内核的配置（`adb shell zcat /proc/config.gz`） |
 | `anykernel/anykernel.sh` | AnyKernel3 刷机脚本（只换内核，顺带安装 ksu_susfs） |
+| `check_deps.sh` | 检查 KernelSU-Next、SUSFS、管理器的更新，有就开 Issue |
 
 ## 工具链
 
@@ -22,6 +23,7 @@
 - **push 到 `lineage-24.0-ksu`**：编译，zip 在该次运行页面的 Artifacts 里。
 - **Actions → Build KSU kernel → Run workflow**：手动编译，可选先 rebase 到上游最新、发布 Release。
 - **每天 04:00**：LineageOS `lineage-24.0` 有新提交时，在云端 rebase 并编译发布 Release。冲突会失败并发邮件，分支本身不会被改动。
+- **每天 03:30**（[check-deps.yml](../.github/workflows/check-deps.yml)）：KernelSU-Next、SUSFS 有新提交，或管理器要求的最低内核版本超过当前内核时，开 Issue 提醒（只通知，不改代码）。KernelSU-Next 有新提交时还会自动试编译，结果回复到 Issue。需要在 Settings → General → Features 打开 Issues。本地试运行：`DRY_RUN=1 ci/check_deps.sh`。
 
 ## 两个刷机包
 

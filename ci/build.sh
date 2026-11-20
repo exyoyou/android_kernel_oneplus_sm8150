@@ -128,7 +128,23 @@ if grep -q '^CONFIG_KPROBES=y' "$OUT/.config"; then
 	exit 1
 fi
 
+# KernelSU-Next 的 Kbuild 发现内核里缺它要的函数或字段时，会在编译时用 sed 直接改内核源码
+# （比如往 seccomp.h 插字段，不加 genksyms 保护，符号 CRC 就变了）。本分支已经手动加好，
+# 正常不会触发；触发了说明新版 KernelSU-Next 又加了自动修改，要照“关键设计”第 2 条手动处理。
+# 对比编译前后的 git diff，本地有没提交的改动也不会误报；ci/、.github/、文档不算内核源码，
+# 编译期间改它们也不会误报。
+SRC_PATHS=(. ':!ci' ':!.github' ':!*.md')
+src_diff() { git -C "$SRC" diff --ignore-submodules -- "${SRC_PATHS[@]}" | sha1sum; }
+src_before=$(src_diff)
+
 make "${MAKE_ARGS[@]}" -j"$JOBS" Image 2>&1 | tee "$OUT/build.log"
+
+if [ "$(src_diff)" != "$src_before" ]; then
+	git -C "$SRC" diff --stat --ignore-submodules -- "${SRC_PATHS[@]}" >&2
+	echo "编译过程中内核源码被修改了（多半是 KernelSU-Next 的 Kbuild 自动打的补丁），" \
+	     "可能改变符号 CRC。请把改动手动加进源码并对 genksyms 隐藏，见 KERNELSU.md" >&2
+	exit 1
+fi
 
 # 检查版本后缀，对不上的话刷进去 WiFi 会打不开
 RELEASE=$(cat "$OUT/include/config/kernel.release")

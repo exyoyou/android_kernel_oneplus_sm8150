@@ -9,6 +9,9 @@
 #                                 （GitHub 会发邮件），分支本身永远不会被推送修改。
 #                                 定时任务只在仓库默认分支上运行，要启用就把
 #                                 lineage-24.0-ksu 设为默认分支。
+# - 试编译（check-deps.yml 发现 KernelSU-Next 有新提交时自动触发）
+#                               → 把 submodule 换成指定提交编译，不发布 Release，
+#                                 结果回复到对应的 Issue。分支本身不改动。
 name: Build KSU kernel
 
 on:
@@ -29,11 +32,20 @@ on:
         description: 发布为 GitHub Release（否则只上传 Artifact）
         type: boolean
         default: true
+      ksu_ref:
+        description: 试编译：KernelSU-Next 换成这个提交（留空 = 用 submodule 里的版本；填了就不发布 Release）
+        type: string
+        default: ''
+      report_issue:
+        description: 试编译：把结果回复到这个 Issue 编号（一般由 check-deps.yml 自动填写）
+        type: string
+        default: ''
   schedule:
     - cron: '0 20 * * *' # 每天北京时间 04:00
 
 permissions:
   contents: write # 发布 Release 需要
+  issues: write   # 试编译结果回复到 Issue
 
 concurrency:
   group: build-ksu # 同一时间只跑一个编译，后来的排队
@@ -95,6 +107,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           IN_REBASE: ${{ inputs.rebase_upstream }}
           IN_RELEASE: ${{ inputs.release }}
+          IN_KSU_REF: ${{ inputs.ksu_ref }}
           BASE: ${{ steps.base.outputs.base }}
           UP: ${{ steps.base.outputs.up }}
           HEAD_SHA: ${{ steps.base.outputs.head }}
@@ -105,6 +118,8 @@ jobs:
           workflow_dispatch)
             [ "$IN_REBASE" = true ] && [ "$UP" != "$BASE" ] && rebase=true
             [ "$IN_RELEASE" = true ] && release=true
+            # 试编译的 KernelSU-Next 没测试过，不发布
+            [ -n "$IN_KSU_REF" ] && release=false
             ;;
           schedule)
             # tag 包含上游提交和本分支提交，同样的组合只编译一次
@@ -154,11 +169,18 @@ jobs:
 
       - name: 检出 KernelSU-Next
         if: steps.plan.outputs.build == 'true'
+        env:
+          KSU_REF: ${{ inputs.ksu_ref }}
         run: |
           # 需要完整历史和 tag：KernelSU-Next 用它们计算版本号（管理器里显示的版本），
           # 浅克隆会导致版本号不对
           git submodule update --init KernelSU-Next
           git -C KernelSU-Next fetch -q --tags origin
+          # 试编译：换成指定的提交（只在云端，不提交）
+          if [ -n "$KSU_REF" ]; then
+            git -C KernelSU-Next fetch -q origin legacy
+            git -C KernelSU-Next checkout -q "$KSU_REF"
+          fi
           git -C KernelSU-Next describe --tags
 
       - name: 恢复 clang 缓存
@@ -207,7 +229,7 @@ jobs:
         if: steps.plan.outputs.build == 'true' && !cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build.outputs.zip_name || 'build-log' }}
+          name: ${{ inputs.ksu_ref && 'ksu-test-' || '' }}${{ steps.build.outputs.zip_name || 'build-log' }}
           path: |
             ${{ steps.build.outputs.zip }}
             ${{ steps.build.outputs.zip_ota }}
@@ -257,3 +279,54 @@ jobs:
           # Release 的 tag 指向本分支原来的提交（云端 rebase 的结果没有推送）
           gh release create "$TAG" "$ZIP" "$ZIP_OTA" -R "$GITHUB_REPOSITORY" \
             --target "$BRANCH_HEAD" --title "$TAG (${RELEASE##*-perf-})" --notes-file notes.md
+
+      # 试编译：不管成功失败，都把结果回复到 check-deps.yml 开的 Issue
+      - name: 回复试编译结果
+        if: always() && inputs.report_issue != ''
+        env:
+          ISSUE: ${{ inputs.report_issue }}
+          KSU_REF: ${{ inputs.ksu_ref }}
+          OUTCOME: ${{ steps.build.outcome }}
+          RELEASE: ${{ steps.build.outputs.release }}
+          LOG: ${{ runner.temp }}/work/out/build.log
+        run: |
+          run_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          ksu=$(git -C KernelSU-Next describe --tags 2>/dev/null || echo "$KSU_REF")
+          ver=$(grep -o 'KernelSU-Next version: [0-9]*' "$LOG" 2>/dev/null | head -n1 | grep -o '[0-9]*$' || true)
+          # KernelSU-Next 的 Kbuild 会在编译时用 sed 往内核源码里补它需要的函数和字段，
+          # 补了就说明本分支缺东西，而且很可能改变符号 CRC（见 KERNELSU.md“关键设计”第 2 条）
+          modified=$(git diff --stat --ignore-submodules | tail -n 20)
+          {
+            if [ "$OUTCOME" = success ]; then
+              echo "### ✅ 用 \`${KSU_REF:0:12}\` 试编译通过"
+            else
+              echo "### ❌ 用 \`${KSU_REF:0:12}\` 试编译失败（$OUTCOME）"
+            fi
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| KernelSU-Next | \`$ksu\`（版本号 ${ver:-未知}） |"
+            echo "| 内核版本 | \`${RELEASE:-未生成}\` |"
+            if [ -z "$modified" ]; then
+              echo "| 内核源码 | ✅ 编译过程中没有被修改 |"
+            else
+              echo "| 内核源码 | ⚠️ **编译过程中被 KernelSU-Next 修改了**，会影响 CRC，升级时要手动加好并对 genksyms 隐藏 |"
+            fi
+            if [ -n "$modified" ]; then
+              echo
+              echo '```'
+              echo "$modified"
+              echo '```'
+            fi
+            if [ "$OUTCOME" != success ] && [ -f "$LOG" ]; then
+              echo
+              echo "编译错误（前 20 条）："
+              echo
+              echo '```'
+              grep -E 'error:|Error [0-9]+' "$LOG" | head -n 20 || true
+              echo '```'
+            fi
+            echo
+            echo "[运行记录]($run_url)。刷机包在运行页面的 Artifacts 里（\`ksu-test-\` 开头），**没有刷机测试过**，升级时请按 KERNELSU.md 在本地编译、对比 CRC、刷机测试。"
+          } >report.md
+          gh issue comment "$ISSUE" -R "$GITHUB_REPOSITORY" --body-file report.md

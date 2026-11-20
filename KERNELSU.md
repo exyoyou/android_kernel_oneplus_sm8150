@@ -30,7 +30,9 @@
 | `ci/device_config` | 手机上 LineageOS 内核的配置（`adb shell zcat /proc/config.gz`），编译以它为起点 |
 | `ci/anykernel/anykernel.sh` | 刷机脚本：只换内核（`split_boot` + `flash_boot`），刷入前检查版本后缀，并把 ksu_susfs 装到 `/data/adb/ksu/bin` |
 | `ci/README.md` | 云编译的使用说明 |
-| `.github/workflows/build-ksu.yml` | GitHub Actions 工作流 |
+| `ci/check_deps.sh` | 检查 KernelSU-Next、SUSFS、管理器有没有要跟进的更新，有就开 Issue。本地 `DRY_RUN=1 ci/check_deps.sh` 只打印不开 Issue |
+| `.github/workflows/build-ksu.yml` | GitHub Actions 编译工作流 |
+| `.github/workflows/check-deps.yml` | 每天运行 `ci/check_deps.sh` 的工作流 |
 
 ### 内核源码改动
 
@@ -157,6 +159,19 @@
 | push 到 `lineage-24.0-ksu`（只改 `.md` 的提交不触发） | 编译，zip 在运行页面的 Artifacts 里 |
 | Actions 页面手动运行 | 可选：先 rebase 到上游最新（只在云端，不推送）、手动指定 `localversion`、发布 Release |
 | 每天北京时间 04:00 | 上游 `lineage-24.0` 有新提交时，在云端 rebase、编译、发布 Release；冲突则运行失败并发邮件。只有当 `lineage-24.0-ksu` 是仓库默认分支时才会运行 |
+| 每天北京时间 03:30（`check-deps.yml`） | 检查依赖更新，只开 Issue 提醒、不改代码（见下表）。同样只在默认分支上运行，需要仓库打开 Issues |
+
+`check-deps.yml` 检查的内容（同一个版本只提醒一次，同类的旧 Issue 还开着就改成新内容）：
+
+| 检查 | 开的 Issue | 额外动作 |
+|---|---|---|
+| KernelSU-Next `legacy` 比 submodule 新 | 新提交列表、版本号；标出是否改了 `uapi/`（改了就要同步更新管理器）、`Kbuild` | 触发 `build-ksu.yml` 试编译（`ksu_ref` 填新提交，不发布 Release），结果回复到 Issue：能否编译、编译时内核源码有没有被 KSU 自动修改 |
+| susfs4ksu `kernel-4.14` 比 `SUSFS_COMMIT` 新 | 新版本号、提交列表，分别标出内核补丁、头文件、KernelSU 对接补丁、`ksu_susfs` 有没有改 | — |
+| 官方 `dev` 或 `youyou` 管理器的 `MINIMAL_SUPPORTED_KERNEL` 高于当前内核的 KSU 版本号 | 提醒先别更新管理器，或先升级内核 | — |
+
+收到 Issue 后按下面“升级 KernelSU-Next”“升级 SUSFS”手动升级，改完关闭 Issue。
+
+`ci/build.sh` 每次编译都会对比编译前后的 `git diff`：KernelSU-Next 的 Kbuild 发现内核缺它要的函数或字段时会用 sed 直接改内核源码（不加 genksyms 保护，CRC 会变），一旦发生就报错。
 
 - clang 从 AOSP 公开仓库 `platform/prebuilts/clang/host/linux-x86` 的最后一个公开提交 `70a12c4fe889` 下载，删掉不用的部分后缓存。
 - NDK r27 用来编译 ksu_susfs。
@@ -249,7 +264,9 @@ cd .. && git add KernelSU-Next && git commit
 
 - hook 函数签名变了会编译报错，按新版文档修改上面那几处 hook。
 - 新版可能要求更新的 SUSFS。
-- 手机上的管理器（YouYouSU-Next）最好同步升级到对应版本。
+- 管理器不用每次跟着换。`legacy` 分支只有 `kernel/` 和 `uapi/`，管理器和 ksud 来自官方 `dev` 分支（YouYouSU-Next 的 `youyou` 分支基于它），两边版本号本来就不同（目前内核 33327、管理器 33558）。
+  只要内核版本号不低于管理器的 `MINIMAL_SUPPORTED_KERNEL`（目前 33188），管理器就能用。
+  `legacy` 改了 `uapi/`（内核与 ksud 的接口）时才需要同步更新管理器：`youyou` rebase 到官方 `dev` 后由 fork 的 CI 编译，不能装官方 APK（签名不对）。
 - 建议只跟正式的 `*-legacy` tag。
 
 ### 升级 SUSFS
@@ -281,7 +298,8 @@ cd .. && git add KernelSU-Next && git commit
 | `4ef2b0f07` | docs: 补充 SUSFS 各文件的作用 | 新增“SUSFS 各文件的作用”一节，含与 susfs4ksu 原版的 7 处差异和升级步骤 |
 | `a76e2198f` | ci: zip 文件名里的时间改用北京时间 | GitHub 机器默认 UTC，生成文件名时指定 `TZ=Asia/Shanghai` |
 | `4a51b6ffc` | ci: 额外生成 OTA 后刷另一个槽位的刷机包 | 每次编译多出一个 `-OTA-inactive.zip`（`anykernel.sh` 多一行 `SLOT_SELECT=inactive;`），OTA 装完不重启就能在管理器里刷进新系统的槽位；Release 说明标注两个包的用法 |
-| （最新） | ci: 刷入前自动检查内核版本后缀 | `anykernel.sh` 在写入前对比目标槽位官方内核和包里内核的版本，不一致就中止并提示需要的后缀，避免刷完 WiFi 打不开 |
+| `6adefda45` | ci: 刷入前自动检查内核版本后缀 | `anykernel.sh` 在写入前对比目标槽位官方内核和包里内核的版本，不一致就中止并提示需要的后缀，避免刷完 WiFi 打不开 |
+| （最新） | ci: 每天检查 KernelSU-Next、SUSFS、管理器的更新 | 新增 `ci/check_deps.sh` 和 `check-deps.yml`，有更新就开 Issue；KSU 有新提交时自动试编译并回复结果。`build-ksu.yml` 加 `ksu_ref`、`report_issue` 输入；`build.sh` 检查编译时源码有没有被 KSU 修改 |
 
 ### 历程
 
