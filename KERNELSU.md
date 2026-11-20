@@ -28,7 +28,7 @@
 | `fs/susfs.c`、`fs/susfs_ksu.c`、`include/linux/susfs*.h`、`fs/Kconfig.susfs` | SUSFS 主体 |
 | `ci/build.sh` | 编译脚本：内核 + ksu_susfs + AnyKernel3 zip（普通包和 `-OTA-inactive` 包），云端和本地通用 |
 | `ci/device_config` | 手机上 LineageOS 内核的配置（`adb shell zcat /proc/config.gz`），编译以它为起点 |
-| `ci/anykernel/anykernel.sh` | 刷机脚本：只换内核（`split_boot` + `flash_boot`），并把 ksu_susfs 装到 `/data/adb/ksu/bin` |
+| `ci/anykernel/anykernel.sh` | 刷机脚本：只换内核（`split_boot` + `flash_boot`），刷入前检查版本后缀，并把 ksu_susfs 装到 `/data/adb/ksu/bin` |
 | `ci/README.md` | 云编译的使用说明 |
 | `.github/workflows/build-ksu.yml` | GitHub Actions 工作流 |
 
@@ -202,10 +202,14 @@ OTA 包只比普通包多 `anykernel.sh` 里的一行 `SLOT_SELECT=inactive;`（
 只用手机（推荐，2026-11-21 从 1019 OTA 到 1116 实测通过）：
 
 1. 系统设置 → 更新器，安装 OTA，**装完先不要重启**。
-2. 确认新系统内核的版本后缀：Kernel Flasher 查看另一个槽位，或 root 终端运行 `strings /dev/block/by-name/boot_b | grep -m1 'Linux version'`（当前在 `_b` 就看 `boot_a`）。
-3. 在 Releases 下载后缀相同的 **`-OTA-inactive.zip`**。没有的话，手动运行工作流：勾选 `rebase_upstream`，`localversion` 填这个后缀。
-4. YouYouSU-Next → 安装 → 刷入 AnyKernel (.zip) → 选这个包。日志里应该写的是**另一个槽位**的 `by-name/boot_x`。
-5. 重启，root 保持不丢。
+2. 在 Releases 下载最新的 **`-OTA-inactive.zip`**。
+3. YouYouSU-Next → 安装 → 刷入 AnyKernel (.zip) → 选这个包。日志里 `Target` 应该是**另一个槽位**的 `by-name/boot_x`。
+   - 显示 `Kernel version matches.` 并且最后是 `Done!`：刷好了。
+   - 显示 `Version mismatch, nothing was flashed!`：这次 OTA 的内核后缀和包不一样，什么都没写。日志里 `needs: -gxxxxxxxxxxxx` 就是需要的后缀，到 Releases 找这个后缀的包；没有就手动运行工作流（勾选 `rebase_upstream`，`localversion` 填这个后缀，勾选 `release`），编完再刷。
+4. 重启，root 保持不丢。
+
+想在刷之前自己确认后缀：LineageOS 下载页该版本的 `build-manifest.xml` 里 `kernel_oneplus_sm8150` 的 `revision` 前 12 位；或 OTA 装完后用 Kernel Flasher 查看另一个槽位；或 root 终端运行
+`su -c 'cur=$(getprop ro.boot.slot_suffix); [ "$cur" = _a ] && t=_b || t=_a; grep -a -o -m1 "4\.14\.[0-9]*-openela-perf-g[0-9a-f]\{12\}" /dev/block/by-name/boot$t | head -1'`。
 
 有电脑（OTA 后已经重启、root 丢了时也用这个）：
 
@@ -215,6 +219,9 @@ OTA 包只比普通包多 `anykernel.sh` 里的一行 `SLOT_SELECT=inactive;`（
 4. `adb reboot recovery` → Apply update → Apply from ADB → `adb sideload <zip>`。
 
 后缀对不上的表现：能开机、KSU 正常，但 WiFi 打不开。重刷后缀正确的 zip 就能恢复。
+
+**刷入前的版本检查**（`anykernel.sh` 的 `check_kernel_release`）：`split_boot` 导出目标槽位的 boot 后，读出里面内核的版本横幅（官方内核未压缩，`Linux version x.y.z-...` 可以直接读到），和包里 `Image` 的对比。
+一致才执行 `flash_boot`；目标是官方内核且不一致就 `abort`，不写入；目标已经是 KSU 内核（含 `KernelSU:` 字符串，比如重刷或修复之前刷错的后缀）时只提示不拦截；版本读不出来时也只提示。
 
 GitHub Actions 的 Artifact 下载下来是外面又包了一层的 zip（里面是两个刷机包、`ksu_susfs`、`build.log`），要先解开，刷里面的包。Release 里的文件可以直接刷。
 
@@ -273,7 +280,8 @@ cd .. && git add KernelSU-Next && git commit
 | `1a0eabaa8` | 注释: 给 KSU hook 和云编译脚本加中文注释 | 说明每个 hook 的作用。SUSFS 相关文件不加注释（说明写在本文档“SUSFS 各文件的作用”），减少升级时的冲突。编译验证通过，符号 CRC 不变 |
 | `4ef2b0f07` | docs: 补充 SUSFS 各文件的作用 | 新增“SUSFS 各文件的作用”一节，含与 susfs4ksu 原版的 7 处差异和升级步骤 |
 | `a76e2198f` | ci: zip 文件名里的时间改用北京时间 | GitHub 机器默认 UTC，生成文件名时指定 `TZ=Asia/Shanghai` |
-| （最新） | ci: 额外生成 OTA 后刷另一个槽位的刷机包 | 每次编译多出一个 `-OTA-inactive.zip`（`anykernel.sh` 多一行 `SLOT_SELECT=inactive;`），OTA 装完不重启就能在管理器里刷进新系统的槽位；Release 说明标注两个包的用法 |
+| `4a51b6ffc` | ci: 额外生成 OTA 后刷另一个槽位的刷机包 | 每次编译多出一个 `-OTA-inactive.zip`（`anykernel.sh` 多一行 `SLOT_SELECT=inactive;`），OTA 装完不重启就能在管理器里刷进新系统的槽位；Release 说明标注两个包的用法 |
+| （最新） | ci: 刷入前自动检查内核版本后缀 | `anykernel.sh` 在写入前对比目标槽位官方内核和包里内核的版本，不一致就中止并提示需要的后缀，避免刷完 WiFi 打不开 |
 
 ### 历程
 

@@ -30,7 +30,8 @@
 | `...-<日期>.zip` | 电脑 `adb sideload`（系统没更新时也可用管理器“刷入 AnyKernel”） | 刷当前槽位：首次刷入、root 丢了要恢复、只换内核 |
 | `...-<日期>-OTA-inactive.zip` | 手机管理器“刷入 AnyKernel (.zip)” | 刷另一个槽位：OTA 装完、还没重启时用，重启后 root 不丢 |
 
-两个包只差 `anykernel.sh` 里的一行 `SLOT_SELECT=inactive;`。OTA 包不要在 Recovery 里用。完整步骤见 [KERNELSU.md](../KERNELSU.md) 的“OTA 更新系统”。
+两个包只差 `anykernel.sh` 里的一行 `SLOT_SELECT=inactive;`。OTA 包不要在 Recovery 里用。
+刷入前会自动对比目标槽位官方内核的版本后缀，不一致就中止、不写入，并在日志里显示需要的后缀。完整步骤见 [KERNELSU.md](../KERNELSU.md) 的“OTA 更新系统”。
 
 ## 版本后缀
 

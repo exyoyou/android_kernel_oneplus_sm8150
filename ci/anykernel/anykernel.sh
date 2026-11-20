@@ -44,9 +44,41 @@ PATCH_VBMETA_FLAG=auto;
 # 载入 AnyKernel3 的核心函数（不能删）
 . tools/ak3-core.sh;
 
+## 刷入前检查内核版本后缀。
+## 厂商 WiFi 模块会校验 vermagic，包里内核的版本字符串必须和目标槽位系统自带的官方内核完全一致，
+## 否则能开机但 WiFi 打不开。split_boot 已经把目标槽位的 boot 导出到 $BOOTIMG（官方内核未压缩，
+## 版本横幅 "Linux version x.y.z-..." 可以直接读到），在 flash_boot 之前对比，不一致就中止，什么都不写。
+## 目标槽位已经是 KSU 内核时（重刷、修复之前刷错的后缀）读不到官方版本，只提示不拦截。
+## 版本读不出来时（工具或格式异常）也只提示，保持和没有这个检查时一样的行为。
+kernel_release() {
+  local v;
+  v=$(strings "$1" 2>/dev/null | grep -o 'Linux version [0-9][^ ]*' | head -n1);
+  echo "${v#Linux version }";
+}
+check_kernel_release() {
+  local want have;
+  have=$(kernel_release $AKHOME/Image);
+  want=$(kernel_release $BOOTIMG);
+  ui_print " " "Target: $BLOCK" "Current kernel: ${want:-unknown}" "This zip:       ${have:-unknown}";
+  if [ -z "$want" -o -z "$have" ]; then
+    ui_print "Warning: cannot read kernel version, skipping version check.";
+  elif [ "$want" = "$have" ]; then
+    ui_print "Kernel version matches.";
+  elif strings $BOOTIMG | grep -q 'KernelSU:'; then
+    ui_print "Warning: target already has a KernelSU kernel with a different version." \
+      "Flashing anyway. Make sure ${have##*-perf} matches the system (WiFi needs it).";
+  else
+    abort "Version mismatch, nothing was flashed!" \
+      "The system on $BLOCK needs: ${want##*-perf}" \
+      "Download the zip with this suffix from Releases," \
+      "or run the workflow with localversion=${want##*-perf}";
+  fi;
+}
+
 # 刷入 boot：只替换内核 Image，ramdisk、dtb、cmdline 都保持原样
 # （split_boot 不解包 ramdisk，跨 OTA 兼容性最好）
 split_boot;
+check_kernel_release;
 flash_boot;
 ## end boot install
 
