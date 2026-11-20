@@ -49,8 +49,74 @@
 | `include/linux/seccomp.h` | 新增 `filter_count` 字段，见下方“关键设计” |
 | `drivers/Kconfig`、`drivers/Makefile` | 接入 `drivers/kernelsu` |
 
-**SUSFS v1.5.5**：`fs/namei.c`、`fs/namespace.c`、`fs/dcache.c`、`fs/readdir.c`、`fs/stat.c`、`fs/statfs.c`、`fs/proc/*`、`fs/proc_namespace.c`、`fs/notify/fdinfo.c`、`fs/overlayfs/*`、`include/linux/mount.h`、`include/linux/sched.h`、`kernel/kallsyms.c`、`kernel/sys.c`。
-用来对普通应用隐藏 KSU 的挂载、路径、kstat、maps、cmdline、kallsyms 符号等。
+**SUSFS v1.5.5**：用来对普通应用隐藏 KSU 的挂载、路径、kstat、maps、cmdline、kallsyms 符号等，详见下一节。
+
+## SUSFS 各文件的作用
+
+### 工作方式
+
+1. 模块或脚本调用用户态工具 `ksu_susfs`（如 `ksu_susfs add_sus_path /xxx`）设置隐藏规则。
+2. `ksu_susfs` 通过 `prctl(0xDEADBEEF, CMD_SUSFS_*, ...)` 把命令交给内核：`kernel/sys.c` 的 prctl 入口 → `fs/susfs_ksu.c` 的 `susfs_handle_prctl()` → `fs/susfs.c` 保存规则。
+3. 规则落到 inode、mount 的标志位上。`fs/susfs_ksu.c` 的 LSM hook（`task_fix_setuid`）在 zygote 派生出普通应用进程时，给进程打上“非 root 应用”标记（`task_struct.susfs_task_state`），同时对它执行 try_umount。
+4. 下面这些 VFS/proc 里的 hook 只对带标记的进程生效，root 进程和 KSU 自己看到的都是真实情况。
+
+### 核心文件
+
+| 文件 | 来源 | 作用 |
+|---|---|---|
+| `fs/susfs.c` | 与 susfs4ksu 原版完全一致 | SUSFS 主体：保存各类隐藏规则，提供给各 hook 调用的判断和伪造函数 |
+| `include/linux/susfs.h` | 原版，**不能改** | 命令号、规则结构体、函数声明。编译脚本会与 susfs4ksu 原文件逐字节比对 |
+| `include/linux/susfs_def.h` | 原版，**不能改** | inode/mount 标志位、特殊 mnt_id 等常量。同样会被比对 |
+| `fs/susfs_ksu.c` | **本项目自写** | SUSFS 与 KSU-Next legacy 的对接代码，见下方“与原版的差异” |
+| `fs/Kconfig.susfs` | 本项目调整 | SUSFS 的配置菜单，由 `fs/Kconfig` 引入 |
+
+### hook 所在文件
+
+| 文件 | 配置项 | 作用 |
+|---|---|---|
+| `fs/namei.c` | `SUS_PATH`、`OPEN_REDIRECT` | 路径查找时，对应用把隐藏路径当作不存在；按规则把打开某路径重定向到另一路径 |
+| `fs/dcache.c` | `SUS_PATH` | dentry 缓存查找（`__d_lookup`）时跳过隐藏路径 |
+| `fs/readdir.c` | `SUS_PATH` | 列目录（`filldir` 系列）时不返回隐藏的条目 |
+| `fs/stat.c` | `SUS_KSTAT` | `generic_fillattr` 中对标记的文件返回伪造的 ino、dev 等，让被替换的文件看起来像原文件 |
+| `fs/proc/task_mmu.c` | `SUS_KSTAT` | `/proc/<pid>/maps` 中伪造被标记文件的 dev、ino |
+| `fs/namespace.c` | `SUS_MOUNT`、`TRY_UMOUNT`、`AUTO_ADD_*` | KSU 创建的挂载从单独的号段分配 mnt_id，不在普通挂载的编号里留下空洞；自动把 KSU 默认挂载和 bind mount 加入隐藏列表、try_umount 列表；zygote 复制挂载命名空间时的处理 |
+| `fs/proc_namespace.c` | `SUS_MOUNT` | `/proc/<pid>/mounts`、`mountinfo`、`mountstats` 中不显示隐藏的挂载 |
+| `fs/proc/fd.c` | `SUS_MOUNT` | `/proc/<pid>/fdinfo` 里的 mnt_id 改为伪造值 |
+| `fs/notify/fdinfo.c` | `SUS_MOUNT` | inotify 的 fdinfo 里隐藏相关挂载信息 |
+| `fs/statfs.c` | `SUS_MOUNT` | statfs 对隐藏挂载返回伪造的结果 |
+| `fs/proc/cmdline.c` | `SPOOF_CMDLINE_OR_BOOTCONFIG` | 按规则伪造 `/proc/cmdline` 的内容（如隐藏解锁相关参数） |
+| `kernel/sys.c` | `SPOOF_UNAME`，以及 prctl 入口 | 伪造 `uname` 返回的内核版本；prctl 入口把 SUSFS 命令交给 `fs/susfs_ksu.c` |
+| `kernel/kallsyms.c` | `HIDE_KSU_SUSFS_SYMBOLS` | `/proc/kallsyms` 中不显示名字含 `ksu_`、`susfs`、`kernelsu`、`ksud`、`ksuver` 的符号 |
+| `include/linux/mount.h` | `KSU_SUSFS` | `struct vfsmount` 新增 `susfs_mnt_id_backup`，保存挂载原本的 mnt_id |
+| `include/linux/sched.h` | `KSU_SUSFS` | `struct task_struct` 新增 `susfs_task_state`（进程标记）、`susfs_last_fake_mnt_id` |
+| `fs/overlayfs/*` | `SUS_OVERLAYFS` | 伪造 overlayfs 文件的 kstat/statfs。**本内核没开这个选项，这些改动不生效**：KSU-Next legacy 用 magic mount 挂模块（`HAS_MAGIC_MOUNT=y`），不用 overlayfs |
+
+当前开启的选项（`ci/build.sh` 编译出的 `.config`）：`HAS_MAGIC_MOUNT`、`SUS_PATH`、`SUS_MOUNT`、`AUTO_ADD_SUS_KSU_DEFAULT_MOUNT`、`AUTO_ADD_SUS_BIND_MOUNT`、`SUS_KSTAT`、`TRY_UMOUNT`、`AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT`、`SPOOF_UNAME`、`ENABLE_LOG`、`HIDE_KSU_SUSFS_SYMBOLS`、`SPOOF_CMDLINE_OR_BOOTCONFIG`、`OPEN_REDIRECT`（均省略 `CONFIG_KSU_SUSFS_` 前缀）。没开的只有 `SUS_OVERLAYFS`。
+
+### 与 susfs4ksu 原版的差异（升级 SUSFS 时要重做）
+
+用 susfs4ksu `77905b5a071e` 的 `kernel_patches/50_add_susfs_in_kernel-4.14.patch` 和原版文件对比，差异如下：
+
+1. **新增 `fs/susfs_ksu.c`**。原版通过 `kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch` 修改 KernelSU 本身（`core_hook.c`、`selinux.c`），但 KSU-Next legacy 的内部结构不同，也没有 prctl 接口，那个补丁打不上。所以同样的功能改写在这个文件里，用 KSU-Next 现有的符号实现：
+   - SELinux 域判断（是不是 KSU 进程、zygote 进程），供 `fs/namespace.c` 等 hook 使用
+   - `ksu_try_umount()`、`susfs_try_umount_all()`
+   - prctl 命令接口 `susfs_handle_prctl()`，供 `ksu_susfs` 使用
+   - `task_fix_setuid` LSM hook：给普通应用进程打标记，并对它执行 try_umount
+2. **`kernel/sys.c`** 的 prctl 系统调用开头加了调用 `susfs_handle_prctl()` 的入口（原版这部分在 KernelSU 里）。
+3. **`fs/Kconfig.susfs`**：配置菜单原版放在 KernelSU 的 Kconfig 里，这里移到 `fs/`，由 `fs/Kconfig` 引入。
+4. **`fs/Makefile`**：多编译 `susfs_ksu.o`。
+5. **保持 CRC 不变**（原因同“关键设计”第 2 条）：
+   - `include/linux/mount.h`、`include/linux/sched.h` 新增的字段加了 `!defined(__GENKSYMS__)`，对 genksyms 隐藏；
+   - `fs/statfs.c` 对 `susfs_def.h` 和 `mount.h` 的 include 也对 genksyms 隐藏，否则 `vfs_statfs()` 原型里类型的展开方式会变，CRC 跟着变。
+6. **`kernel/kallsyms.c`**：原版只匹配 `ksu_` 和以 `susfs_`、`ksud` 开头的名字。这里改成子串匹配，并加了 `kernelsu`、`ksuver`，这样 LTO 改过名的局部符号（如 `__func__.susfs_init.llvm.123`）也能藏住。不用单独的 `ksu`，因为它会误伤 `cksum`。
+7. **`fs/proc/cmdline.c`、`fs/proc/task_mmu.c`**：原版补丁在这两个文件上打不上（上下文与本内核不同），是手动按原意移植的。
+
+### 升级 SUSFS 的步骤
+
+1. 在 KSU 提交（只含 KSU、不含 SUSFS 的状态）上打新版 `50_add_susfs_in_kernel-4.14.patch`，复制新版的 `fs/susfs.c`、`include/linux/susfs*.h`。
+2. 把上面 7 处差异重做一遍。`fs/susfs_ksu.c` 要对照新版 `10_enable_susfs_for_ksu.patch` 的变化同步修改（比如新增的命令）。
+3. 改 `ci/build.sh` 里的 `SUSFS_COMMIT`。
+4. 编译，对比新旧 `vmlinux` 的 `__crc_*` 符号确认 CRC 没变，再刷机测试。刷完记得更新手机上的 `ksu_susfs`。
 
 ## 关键设计（改动前必读）
 
@@ -166,9 +232,8 @@ cd .. && git add KernelSU-Next && git commit
 
 ### 升级 SUSFS
 
-1. 用 susfs4ksu `kernel-4.14` 分支的新版补丁更新内核源码。
-2. 把 `ci/build.sh` 里的 `SUSFS_COMMIT` 改成同一个提交。
-3. 编译、刷机测试。刷完后 ksu_susfs 也要更新（刷机脚本会装，Lineage Recovery 下需要 `push_ksu_susfs.sh`）。
+见上面“SUSFS 各文件的作用 → 升级 SUSFS 的步骤”。注意本项目的 SUSFS 有 7 处与原版不同，不能直接整体替换。
+刷完后 ksu_susfs 也要更新（刷机脚本会装，Lineage Recovery 下需要 `push_ksu_susfs.sh`）。
 
 ### LineageOS 大版本升级（如 24 → 25）
 
@@ -190,7 +255,8 @@ cd .. && git add KernelSU-Next && git commit
 | `70bee9718` | ci: 用 GitHub Actions 云编译 KernelSU-Next + SUSFS 内核 | 加入 `ci/` 和工作流，最初用 clang r596125（从仓库 Release 下载精简包） |
 | `c1c04fa1c` | ci: 改用 AOSP 公开的 clang r547379 | r596125 来自 Android CI 内部构建，已无法匿名下载，改用 AOSP 公开的 r547379，删掉 `ci/pack_clang.sh`。已刷机测试通过 |
 | `9b124b7ca` | docs: 加入 KernelSU-Next + SUSFS 项目说明 | 新增本文档和 CLAUDE.md |
-| （最新） | 注释: 给 KSU hook 和云编译脚本加中文注释 | 说明每个 hook 的作用。SUSFS 补丁文件保持原样，不加注释，方便以后整体替换升级。编译验证通过，符号 CRC 不变 |
+| `1a0eabaa8` | 注释: 给 KSU hook 和云编译脚本加中文注释 | 说明每个 hook 的作用。SUSFS 相关文件不加注释（说明写在本文档“SUSFS 各文件的作用”），减少升级时的冲突。编译验证通过，符号 CRC 不变 |
+| （最新） | docs: 补充 SUSFS 各文件的作用 | 新增“SUSFS 各文件的作用”一节，含与 susfs4ksu 原版的 7 处差异和升级步骤 |
 
 ### 历程
 
