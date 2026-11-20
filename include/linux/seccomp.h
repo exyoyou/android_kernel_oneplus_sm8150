@@ -3,6 +3,7 @@
 #define _LINUX_SECCOMP_H
 
 #include <uapi/linux/seccomp.h>
+#include <linux/atomic.h>
 
 #define SECCOMP_FILTER_FLAG_MASK	(SECCOMP_FILTER_FLAG_TSYNC	| \
 					 SECCOMP_FILTER_FLAG_LOG	| \
@@ -27,6 +28,15 @@ struct seccomp_filter;
  */
 struct seccomp {
 	int mode;
+	/*
+	 * KernelSU: sits in the padding hole after @mode, so neither the size
+	 * of struct seccomp nor the offset of @filter changes. Hidden from
+	 * genksyms to keep symbol CRCs (MODVERSIONS) stable for the prebuilt
+	 * vendor modules.
+	 */
+#ifndef __GENKSYMS__
+	atomic_t filter_count;
+#endif
 	struct seccomp_filter *filter;
 };
 
