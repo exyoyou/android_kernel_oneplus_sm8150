@@ -156,7 +156,8 @@ cp "$OUT/arch/arm64/boot/Image" "$ak3/Image"
 # 刷机时由 anykernel.sh 安装到 /data/adb/ksu/bin/ksu_susfs
 cp "$DIST/ksu_susfs" "$ak3/ksu_susfs"
 
-ZIP_NAME=YouYouSU-Next-legacy-SUSFS-$SUSFS_VERSION-guacamole-${RELEASE##*-perf-}-$(date +%Y%m%d-%H%M).zip
+# 文件名里的时间用北京时间（GitHub 的机器默认是 UTC）
+ZIP_NAME=YouYouSU-Next-legacy-SUSFS-$SUSFS_VERSION-guacamole-${RELEASE##*-perf-}-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M).zip
 (cd "$ak3" && zip -qr9 "$DIST/$ZIP_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
 echo "刷机包: $DIST/$ZIP_NAME"
 
