@@ -11,9 +11,6 @@
 #                                Schedules only run from the repository's
 #                                default branch, so make lineage-24.0-ksu the
 #                                default branch to enable this.
-#
-# One-time setup: upload the toolchain made by ci/pack_clang.sh as asset
-# clang-r596125-slim.tar.zst of a release tagged toolchain-clang-r596125.
 name: Build KSU kernel
 
 on:
@@ -48,11 +45,11 @@ env:
   KSU_BRANCH: lineage-24.0-ksu
   UPSTREAM_URL: https://github.com/LineageOS/android_kernel_oneplus_sm8150.git
   UPSTREAM_BRANCH: lineage-24.0
-  CLANG_NAME: clang-r596125
-  # Override with repository variables CLANG_URL / CLANG_SHA256 to use
-  # another toolchain tarball.
-  CLANG_URL: ${{ vars.CLANG_URL }}
-  CLANG_SHA256: ${{ vars.CLANG_SHA256 || 'ec3a13d3d0e4414bd5fa925a00931eda2be090343070df47779533f16cfc4b46' }}
+  # AOSP clang, pinned to the last public commit of
+  # platform/prebuilts/clang/host/linux-x86 (AOSP stopped publishing new
+  # prebuilts there in March 2025).
+  CLANG_NAME: clang-r547379
+  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/70a12c4fe88940ab2b0e6d763492dffa2f07e15a/clang-r547379.tgz
 
 jobs:
   build:
@@ -168,21 +165,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/clang
-          key: ${{ env.CLANG_NAME }}-${{ env.CLANG_SHA256 }}
+          key: ${{ env.CLANG_NAME }}-v1
 
       - name: Download clang
         if: steps.plan.outputs.build == 'true' && steps.clang-cache.outputs.cache-hit != 'true'
         run: |
-          f=$RUNNER_TEMP/clang.tar.zst
-          if [ -n "$CLANG_URL" ]; then
-            curl -fL --retry 3 -o "$f" "$CLANG_URL"
-          else
-            gh release download "toolchain-$CLANG_NAME" -R "$GITHUB_REPOSITORY" \
-              -p "$CLANG_NAME-slim.tar.zst" -O "$f"
-          fi
-          echo "$CLANG_SHA256  $f" | sha256sum -c -
-          mkdir -p ~/clang
-          tar -C ~/clang -xf "$f"
+          d=~/clang/$CLANG_NAME
+          mkdir -p "$d"
+          curl -fL --retry 3 "$CLANG_URL" | tar -C "$d" -xz
+          # Keep only what the kernel build uses, so the cache stays small.
+          rm -rf "$d"/{android_libc++,runtimes_ndk_cxx,musl,python3,share} "$d"/lib/clang/*/lib
+          "$d/bin/clang" --version | tee /dev/stderr | grep -q "${CLANG_NAME#clang-}"
+          du -sh "$d"
 
       - name: Set up NDK
         if: steps.plan.outputs.build == 'true'

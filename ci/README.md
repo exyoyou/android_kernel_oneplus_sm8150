@@ -7,16 +7,15 @@
 | `build.sh` | 编译内核 + ksu_susfs，打包 AnyKernel3 zip（云端和本地通用） |
 | `device_config` | 手机上 LineageOS 内核的配置（`adb shell zcat /proc/config.gz`） |
 | `anykernel/anykernel.sh` | AnyKernel3 刷机脚本（只换内核，顺带安装 ksu_susfs） |
-| `pack_clang.sh` | 把 AOSP clang 精简打包，供云端下载 |
 
-## 一次性设置
+## 工具链
 
-1. 打包工具链并上传到 Release：
-   ```bash
-   ci/pack_clang.sh ~/android_kernel/toolchains/clang-r596125 clang-r596125-slim.tar.zst
-   ```
-   在 GitHub 仓库新建 Release，tag 填 `toolchain-clang-r596125`，附件上传 `clang-r596125-slim.tar.zst`。
-2. （可选）想要每天自动跟进 LineageOS 上游：Settings → General → Default branch 改为 `lineage-24.0-ksu`。定时任务只在默认分支上运行。
+用 AOSP clang r547379（clang 20），云端自动从谷歌公开仓库下载（固定在该仓库最后一个公开提交），不用手动上传。
+本地编译：`CLANG_DIR=~/android_kernel/toolchains/clang-r547379 NDK=... ci/build.sh`
+
+## 可选设置
+
+想要每天自动跟进 LineageOS 上游：Settings → General → Default branch 改为 `lineage-24.0-ksu`。定时任务只在默认分支上运行。
 
 ## 什么时候会编译
 
@@ -34,4 +33,4 @@
 - **OTA 后**：如果上游改了内核配置，重新导出 `device_config` 并提交。
 - **升级 SUSFS**：同时更新内核补丁和 `build.sh` 里的 `SUSFS_COMMIT`（脚本会检查头文件是否一致）。
 - **更换管理器签名**：更新 `build.sh` 里的 `KSU_NEXT_MANAGER_SIZE/HASH`。
-- **更换 clang**：重新打包上传，并在仓库 Variables 里设置 `CLANG_URL`、`CLANG_SHA256`（或改工作流里的默认值）。
+- **更换 clang**：改工作流里的 `CLANG_NAME`、`CLANG_URL`，本地编译刷机测试后再推送。

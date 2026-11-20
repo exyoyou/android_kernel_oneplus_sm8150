@@ -3,7 +3,7 @@
 # SUSFS and pack it into an AnyKernel3 zip. Used by GitHub Actions
 # (.github/workflows/build-ksu.yml) and usable locally:
 #
-#   CLANG_DIR=~/android_kernel/toolchains/clang-r596125 \
+#   CLANG_DIR=~/android_kernel/toolchains/clang-r547379 \
 #   NDK=~/Android/Sdk/ndk/27.0.12077973 ci/build.sh
 #
 # Environment (all optional except where noted):
