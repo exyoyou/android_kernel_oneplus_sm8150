@@ -15,6 +15,7 @@
 #                        默认：-g<与 UPSTREAM_REF 的 merge-base 的前 12 位>
 #   UPSTREAM_REF         用来计算上面后缀的 LineageOS 分支（默认：upstream/lineage-24.0）
 #   JOBS                 make 并行数（默认：nproc）
+#   VARIANTS             要出包的管理器签名，空格分隔（默认：youyou official）
 set -euo pipefail
 
 SRC=$(cd "$(dirname "$0")/.." && pwd)
@@ -37,10 +38,22 @@ SUSFS_REPO=https://gitlab.com/simonpunk/susfs4ksu.git
 SUSFS_BRANCH=kernel-4.14
 SUSFS_COMMIT=77905b5a071e6f3669e3b1814cea30147c0801da # v1.5.5
 
-# YouYouSU-Next 管理器的签名证书（RSA 2048，证书不能超过 1024 字节）。
-# 内核只认这个签名的管理器；换签名密钥后用 ksu_cert_hash.sh 重新计算。
-KSU_NEXT_MANAGER_SIZE=${KSU_NEXT_MANAGER_SIZE:-0x2cf}
-KSU_NEXT_MANAGER_HASH=${KSU_NEXT_MANAGER_HASH:-3ba777f7e137c0a3bc0b8da19d32415ba68078d9d2a4ec57d30ad5c965281804}
+# 内核只认一个签名的管理器，所以每种管理器各编一次内核、各出一套刷机包：
+#   youyou    YouYouSU-Next（自签名，RSA 2048，证书不能超过 1024 字节），
+#             换签名密钥后用 ksu_cert_hash.sh 重新计算
+#   official  官方 KernelSU-Next 管理器，签名取 KernelSU-Next Kbuild 里的默认值，
+#             自动跟着 submodule 走。YouYouSU-Next 来不及跟进官方时可以先用它
+# 第二次编译只有 KernelSU 的几个文件要重新编译，再加一次 LTO 链接。
+# 本地只想要其中一种时设 VARIANTS=youyou。
+VARIANTS=${VARIANTS:-youyou official}
+YOUYOU_MANAGER_SIZE=${KSU_NEXT_MANAGER_SIZE:-0x2cf}
+YOUYOU_MANAGER_HASH=${KSU_NEXT_MANAGER_HASH:-3ba777f7e137c0a3bc0b8da19d32415ba68078d9d2a4ec57d30ad5c965281804}
+OFFICIAL_MANAGER_SIZE=$(sed -n 's/^KSU_NEXT_MANAGER_SIZE := \(0x[0-9a-fA-F]*\)$/\1/p' "$SRC/drivers/kernelsu/Kbuild")
+OFFICIAL_MANAGER_HASH=$(sed -n 's/^KSU_NEXT_MANAGER_HASH := \([0-9a-f]\{64\}\)$/\1/p' "$SRC/drivers/kernelsu/Kbuild")
+if [ -z "$OFFICIAL_MANAGER_SIZE" ] || [ -z "$OFFICIAL_MANAGER_HASH" ]; then
+	echo "从 drivers/kernelsu/Kbuild 读不出官方管理器签名（KernelSU-Next 改了写法？）" >&2
+	exit 1
+fi
 
 # 厂商 WiFi 模块（qca_cld3_wlan.ko）加载时会校验 vermagic，所以版本字符串
 # 必须和手机上 LineageOS 内核的完全一致，如 4.14.357-openela-perf-g9f007fac27dc。
@@ -69,8 +82,6 @@ MAKE_ARGS=(
 	LLVM=1 LLVM_IAS=1
 	LOCALVERSION="$PINNED_LOCALVERSION"
 	KBUILD_BUILD_USER=root KBUILD_BUILD_HOST=localhost
-	KSU_NEXT_MANAGER_SIZE="$KSU_NEXT_MANAGER_SIZE"
-	KSU_NEXT_MANAGER_HASH="$KSU_NEXT_MANAGER_HASH"
 )
 
 mkdir -p "$OUT" "$DIST"
@@ -137,64 +148,97 @@ SRC_PATHS=(. ':!ci' ':!.github' ':!*.md')
 src_diff() { git -C "$SRC" diff --ignore-submodules -- "${SRC_PATHS[@]}" | sha1sum; }
 src_before=$(src_diff)
 
-make "${MAKE_ARGS[@]}" -j"$JOBS" Image 2>&1 | tee "$OUT/build.log"
+# 编译一种管理器签名的内核，并做各项检查
+build_kernel() {
+	local size=$1 hash=$2
+	make "${MAKE_ARGS[@]}" -j"$JOBS" \
+		KSU_NEXT_MANAGER_SIZE="$size" KSU_NEXT_MANAGER_HASH="$hash" \
+		Image 2>&1 | tee -a "$OUT/build.log"
 
-if [ "$(src_diff)" != "$src_before" ]; then
-	git -C "$SRC" diff --stat --ignore-submodules -- "${SRC_PATHS[@]}" >&2
-	echo "编译过程中内核源码被修改了（多半是 KernelSU-Next 的 Kbuild 自动打的补丁），" \
-	     "可能改变符号 CRC。请把改动手动加进源码并对 genksyms 隐藏，见 KERNELSU.md" >&2
-	exit 1
-fi
+	if [ "$(src_diff)" != "$src_before" ]; then
+		git -C "$SRC" diff --stat --ignore-submodules -- "${SRC_PATHS[@]}" >&2
+		echo "编译过程中内核源码被修改了（多半是 KernelSU-Next 的 Kbuild 自动打的补丁），" \
+		     "可能改变符号 CRC。请把改动手动加进源码并对 genksyms 隐藏，见 KERNELSU.md" >&2
+		exit 1
+	fi
 
-# 检查版本后缀，对不上的话刷进去 WiFi 会打不开
-RELEASE=$(cat "$OUT/include/config/kernel.release")
-echo "kernel.release: $RELEASE"
-case $RELEASE in
-*-perf"$PINNED_LOCALVERSION") ;;
-*)
-	echo "版本字符串 $RELEASE 不是以 -perf$PINNED_LOCALVERSION 结尾，" \
-	     "厂商 WiFi 模块会拒绝加载" >&2
-	exit 1
-	;;
-esac
+	# 检查版本后缀，对不上的话刷进去 WiFi 会打不开
+	RELEASE=$(cat "$OUT/include/config/kernel.release")
+	echo "kernel.release: $RELEASE"
+	case $RELEASE in
+	*-perf"$PINNED_LOCALVERSION") ;;
+	*)
+		echo "版本字符串 $RELEASE 不是以 -perf$PINNED_LOCALVERSION 结尾，" \
+		     "厂商 WiFi 模块会拒绝加载" >&2
+		exit 1
+		;;
+	esac
 
-# 每次都用干净的 AnyKernel3 目录，避免把旧的 Image 或 ksu_susfs 打进包里
-ak3=$WORK/AnyKernel3
-if [ ! -d "$ak3/.git" ]; then
-	git clone -q "$AK3_REPO" "$ak3"
-fi
-git -C "$ak3" cat-file -e "$AK3_COMMIT^{commit}" 2>/dev/null || git -C "$ak3" fetch -q origin
-git -C "$ak3" checkout -q -f --detach "$AK3_COMMIT"
-git -C "$ak3" clean -qfdx
-find "$ak3" -name placeholder -delete
-cp "$CI/anykernel/anykernel.sh" "$ak3/anykernel.sh"
-cp "$OUT/arch/arm64/boot/Image" "$ak3/Image"
-# 刷机时由 anykernel.sh 安装到 /data/adb/ksu/bin/ksu_susfs
-cp "$DIST/ksu_susfs" "$ak3/ksu_susfs"
+	# 确认 Image 里编进去的确实是这次要的签名（Image 未压缩，哈希以字符串形式存在）
+	if ! grep -qaF "$hash" "$OUT/arch/arm64/boot/Image"; then
+		echo "Image 里找不到管理器签名哈希 $hash" >&2
+		exit 1
+	fi
+}
 
-# 文件名里的时间用北京时间（GitHub 的机器默认是 UTC）
-ZIP_NAME=YouYouSU-Next-legacy-SUSFS-$SUSFS_VERSION-guacamole-${RELEASE##*-perf-}-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M).zip
-(cd "$ak3" && zip -qr9 "$DIST/$ZIP_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
-echo "刷机包: $DIST/$ZIP_NAME"
+# 打包一套刷机包（普通包 + OTA 包）。$1 是 zip 文件名前缀，也是刷机时显示的管理器名
+package() {
+	local name=$1
+	# 每次都用干净的 AnyKernel3 目录，避免把旧的 Image 或 ksu_susfs 打进包里
+	local ak3=$WORK/AnyKernel3
+	if [ ! -d "$ak3/.git" ]; then
+		git clone -q "$AK3_REPO" "$ak3"
+	fi
+	git -C "$ak3" cat-file -e "$AK3_COMMIT^{commit}" 2>/dev/null || git -C "$ak3" fetch -q origin
+	git -C "$ak3" checkout -q -f --detach "$AK3_COMMIT"
+	git -C "$ak3" clean -qfdx
+	find "$ak3" -name placeholder -delete
+	sed "s/^kernel\.string=.*/kernel.string=LineageOS sm8150 4.14 + $name (manual hook) + SUSFS $SUSFS_VERSION/" \
+		"$CI/anykernel/anykernel.sh" >"$ak3/anykernel.sh"
+	cp "$OUT/arch/arm64/boot/Image" "$ak3/Image"
+	# 刷机时由 anykernel.sh 安装到 /data/adb/ksu/bin/ksu_susfs
+	cp "$DIST/ksu_susfs" "$ak3/ksu_susfs"
 
-# OTA 专用包：与普通包只差 anykernel.sh 里的一行 SLOT_SELECT=inactive，
-# AnyKernel3 会把目标从当前槽位换成另一个槽位。用于 OTA 装完、还没重启时，
-# 在管理器里“刷入 AnyKernel”，把内核写进新系统所在的槽位，重启后 root 不丢。
-ZIP_OTA_NAME=${ZIP_NAME%.zip}-OTA-inactive.zip
-sed -i 's/^IS_SLOT_DEVICE=1;$/&\n# OTA 专用包：写入非活动槽位（由 ci\/build.sh 插入）\nSLOT_SELECT=inactive;/' "$ak3/anykernel.sh"
-if [ "$(grep -cx 'SLOT_SELECT=inactive;' "$ak3/anykernel.sh")" != 1 ]; then
-	echo "生成 OTA 包失败：anykernel.sh 里找不到 IS_SLOT_DEVICE=1; 这一行" >&2
-	exit 1
-fi
-(cd "$ak3" && zip -qr9 "$DIST/$ZIP_OTA_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
-echo "OTA 刷机包: $DIST/$ZIP_OTA_NAME"
+	ZIP_NAME=$name-legacy-SUSFS-$SUSFS_VERSION-guacamole-${RELEASE##*-perf-}-$STAMP.zip
+	(cd "$ak3" && zip -qr9 "$DIST/$ZIP_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
+	echo "刷机包: $DIST/$ZIP_NAME"
 
-# 给工作流后续步骤用：输出 zip 路径、版本等信息
+	# OTA 专用包：与普通包只差 anykernel.sh 里的一行 SLOT_SELECT=inactive，
+	# AnyKernel3 会把目标从当前槽位换成另一个槽位。用于 OTA 装完、还没重启时，
+	# 在管理器里“刷入 AnyKernel”，把内核写进新系统所在的槽位，重启后 root 不丢。
+	ZIP_OTA_NAME=${ZIP_NAME%.zip}-OTA-inactive.zip
+	sed -i 's/^IS_SLOT_DEVICE=1;$/&\n# OTA 专用包：写入非活动槽位（由 ci\/build.sh 插入）\nSLOT_SELECT=inactive;/' "$ak3/anykernel.sh"
+	if [ "$(grep -cx 'SLOT_SELECT=inactive;' "$ak3/anykernel.sh")" != 1 ]; then
+		echo "生成 OTA 包失败：anykernel.sh 里找不到 IS_SLOT_DEVICE=1; 这一行" >&2
+		exit 1
+	fi
+	(cd "$ak3" && zip -qr9 "$DIST/$ZIP_OTA_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
+	echo "OTA 刷机包: $DIST/$ZIP_OTA_NAME"
+}
+
+# 文件名里的时间用北京时间（GitHub 的机器默认是 UTC），所有包用同一个时间
+STAMP=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)
+: >"$OUT/build.log"
+for v in $VARIANTS; do
+	case $v in
+	youyou)   build_kernel "$YOUYOU_MANAGER_SIZE" "$YOUYOU_MANAGER_HASH";     package YouYouSU-Next ;;
+	official) build_kernel "$OFFICIAL_MANAGER_SIZE" "$OFFICIAL_MANAGER_HASH"; package KernelSU-Next ;;
+	*) echo "未知的 VARIANTS 取值：$v（可选 youyou、official）" >&2; exit 1 ;;
+	esac
+	# 给工作流后续步骤用：每种管理器的 zip 路径，如 zip_youyou、zip_ota_official
+	if [ -n "${GITHUB_OUTPUT:-}" ]; then
+		{
+			echo "zip_$v=$DIST/$ZIP_NAME"
+			echo "zip_ota_$v=$DIST/$ZIP_OTA_NAME"
+		} >>"$GITHUB_OUTPUT"
+	fi
+	# 第一个变体的 zip 名用作 Artifact 名
+	FIRST_ZIP_NAME=${FIRST_ZIP_NAME:-$ZIP_NAME}
+done
+
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
 	{
-		echo "zip=$DIST/$ZIP_NAME"
-		echo "zip_name=$ZIP_NAME"
-		echo "zip_ota=$DIST/$ZIP_OTA_NAME"
+		echo "zip_name=$FIRST_ZIP_NAME"
 		echo "release=$RELEASE"
 		echo "susfs_version=$SUSFS_VERSION"
 	} >>"$GITHUB_OUTPUT"

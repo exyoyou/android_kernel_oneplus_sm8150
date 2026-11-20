@@ -220,8 +220,11 @@ if [ "$DEV_MIN" -gt "$KSU_CUR_VER" ] || [ "$MGR_MIN" -gt "$KSU_CUR_VER" ]; then
 		echo
 		if [ "$MGR_MIN" -gt "$KSU_CUR_VER" ]; then
 			echo "- ⚠️ **\`$MANAGER_BRANCH\` 分支编出的管理器已经不认当前内核**：别装这个分支新编的 APK，先升级内核里的 KernelSU-Next，或把 \`$MANAGER_BRANCH\` 退回旧版本。"
+			if [ "$DEV_MIN" -le "$KSU_CUR_VER" ]; then
+				echo "- 官方管理器还认当前内核：急用可以先装官方 KernelSU-Next 管理器，刷 Release 里 \`KernelSU-Next-\` 开头的包。"
+			fi
 		else
-			echo "- ⚠️ 官方 \`$KSU_DEV\` 已经提高了要求：**暂时不要把 \`$MANAGER_BRANCH\` rebase 到官方 \`$KSU_DEV\`**，否则新管理器会提示内核版本太旧。"
+			echo "- ⚠️ 官方 \`$KSU_DEV\` 已经提高了要求：**暂时不要把 \`$MANAGER_BRANCH\` rebase 到官方 \`$KSU_DEV\`**，否则新管理器会提示内核版本太旧；用官方管理器（\`KernelSU-Next-\` 开头的包）的也先别更新官方 APK。"
 		fi
 		echo "- 先看 \`$KSU_LEGACY\` 有没有更新到 ≥ $DEV_MIN 的版本（会有单独的 Issue），升级内核后再更新管理器。"
 	} >"$body"

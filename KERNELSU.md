@@ -15,7 +15,7 @@
 | 工作分支 | `lineage-24.0-ksu`（`lineage-24.0` 保持与上游一致，不放自己的改动） |
 | KernelSU-Next | submodule，官方仓库 `legacy` 分支，当前 `v3.4.0-legacy-33-ge5f5ec99`（内核内版本号 33327） |
 | SUSFS | v1.5.5，来自 susfs4ksu `kernel-4.14` 分支提交 `77905b5a071e`，直接写进内核源码 |
-| 管理器 | YouYouSU-Next（自签名的 KernelSU-Next 管理器），源码在 https://github.com/exyoyou/KernelSU-Next 的 `youyou` 分支 |
+| 管理器 | YouYouSU-Next（自签名的 KernelSU-Next 管理器），源码在 https://github.com/exyoyou/KernelSU-Next 的 `youyou` 分支；另出一套认官方 KernelSU-Next 管理器的包 |
 | 编译器 | AOSP clang r547379（clang 20.0.0） |
 | 刷机包 | AnyKernel3（osm0sis，固定提交 `41f04bd`），只替换内核 Image |
 
@@ -26,7 +26,7 @@
 | `KernelSU-Next/` | submodule，KernelSU-Next 官方源码 |
 | `drivers/kernelsu` | 软链接 → `../KernelSU-Next/kernel` |
 | `fs/susfs.c`、`fs/susfs_ksu.c`、`include/linux/susfs*.h`、`fs/Kconfig.susfs` | SUSFS 主体 |
-| `ci/build.sh` | 编译脚本：内核 + ksu_susfs + AnyKernel3 zip（普通包和 `-OTA-inactive` 包），云端和本地通用 |
+| `ci/build.sh` | 编译脚本：内核 + ksu_susfs + AnyKernel3 zip，按管理器签名编两遍（`YouYouSU-Next-`、`KernelSU-Next-`），每遍出普通包和 `-OTA-inactive` 包，云端和本地通用 |
 | `ci/device_config` | 手机上 LineageOS 内核的配置（`adb shell zcat /proc/config.gz`），编译以它为起点 |
 | `ci/anykernel/anykernel.sh` | 刷机脚本：只换内核（`split_boot` + `flash_boot`），刷入前检查版本后缀，并把 ksu_susfs 装到 `/data/adb/ksu/bin` |
 | `ci/README.md` | 云编译的使用说明 |
@@ -139,8 +139,10 @@
    `sm8150-perf_defconfig` 里虽然也加了 KSU 选项，但编译时实际不用它。
 
 4. **管理器签名。**
-   内核只认指定签名的管理器。通过 make 参数 `KSU_NEXT_MANAGER_SIZE=0x2cf`、`KSU_NEXT_MANAGER_HASH=3ba777f7...` 指定为 YouYouSU-Next 的签名（官方管理器装上会不被识别）。
-   换签名密钥后，用 `~/android_kernel/ksu_cert_hash.sh <keystore> <alias>` 重新计算，再改 `ci/build.sh`。
+   内核只认一个签名的管理器（make 参数 `KSU_NEXT_MANAGER_SIZE`、`KSU_NEXT_MANAGER_HASH`），所以 `build.sh` 按 `VARIANTS` 编两遍：
+   - `youyou`：YouYouSU-Next 的签名 `0x2cf`/`3ba777f7...`，出 `YouYouSU-Next-` 开头的包。换签名密钥后用 `~/android_kernel/ksu_cert_hash.sh <keystore> <alias>` 重新计算，再改 `build.sh` 的 `YOUYOU_MANAGER_SIZE/HASH`。
+   - `official`：官方签名，从 KernelSU-Next `Kbuild` 的默认值读取（目前 `0x3e6`/`79e59011...`），出 `KernelSU-Next-` 开头的包，YouYouSU-Next 来不及跟进官方时用。
+   两遍只有签名常量不同，第二遍只重新编译 KernelSU 的文件并重新链接。编译后会检查 `Image` 里确实含有对应的签名哈希。签名不影响版本字符串和符号 CRC。
 
 5. **KernelSU-Next 的版本号来自 submodule 的 git 历史。**
    它的 Kbuild 用 `git rev-list --count` 和 `git describe --tags` 计算版本（33327）。submodule 如果是浅克隆或缺 tag，版本号会出错，管理器可能提示版本不对。云端会完整拉取 submodule 和 tag。
@@ -203,7 +205,8 @@ ci/build.sh
 
 ### OTA 更新系统
 
-每次编译出两个包，内核和 ksu_susfs 完全相同，只是刷入的槽位不同：
+每次编译出两套包：`YouYouSU-Next-...` 认 YouYouSU-Next，`KernelSU-Next-...` 认官方 KernelSU-Next 管理器，按手机上装的管理器选（下文以 YouYouSU-Next 为例，官方的同理）。
+每套两个包，内核和 ksu_susfs 完全相同，只是刷入的槽位不同：
 
 | 文件 | 刷入方式 | 刷到哪 | 什么时候用 |
 |---|---|---|---|
@@ -238,7 +241,7 @@ OTA 包只比普通包多 `anykernel.sh` 里的一行 `SLOT_SELECT=inactive;`（
 **刷入前的版本检查**（`anykernel.sh` 的 `check_kernel_release`）：`split_boot` 导出目标槽位的 boot 后，读出里面内核的版本横幅（官方内核未压缩，`Linux version x.y.z-...` 可以直接读到），和包里 `Image` 的对比。
 一致才执行 `flash_boot`；目标是官方内核且不一致就 `abort`，不写入；目标已经是 KSU 内核（含 `KernelSU:` 字符串，比如重刷或修复之前刷错的后缀）时只提示不拦截；版本读不出来时也只提示。
 
-GitHub Actions 的 Artifact 下载下来是外面又包了一层的 zip（里面是两个刷机包、`ksu_susfs`、`build.log`），要先解开，刷里面的包。Release 里的文件可以直接刷。
+GitHub Actions 的 Artifact 下载下来是外面又包了一层的 zip（里面是四个刷机包、`ksu_susfs`、`build.log`），要先解开，刷里面的包。Release 里的文件可以直接刷。
 
 ### 跟进 LineageOS 上游
 
@@ -299,7 +302,8 @@ cd .. && git add KernelSU-Next && git commit
 | `a76e2198f` | ci: zip 文件名里的时间改用北京时间 | GitHub 机器默认 UTC，生成文件名时指定 `TZ=Asia/Shanghai` |
 | `4a51b6ffc` | ci: 额外生成 OTA 后刷另一个槽位的刷机包 | 每次编译多出一个 `-OTA-inactive.zip`（`anykernel.sh` 多一行 `SLOT_SELECT=inactive;`），OTA 装完不重启就能在管理器里刷进新系统的槽位；Release 说明标注两个包的用法 |
 | `6adefda45` | ci: 刷入前自动检查内核版本后缀 | `anykernel.sh` 在写入前对比目标槽位官方内核和包里内核的版本，不一致就中止并提示需要的后缀，避免刷完 WiFi 打不开 |
-| （最新） | ci: 每天检查 KernelSU-Next、SUSFS、管理器的更新 | 新增 `ci/check_deps.sh` 和 `check-deps.yml`，有更新就开 Issue；KSU 有新提交时自动试编译并回复结果。`build-ksu.yml` 加 `ksu_ref`、`report_issue` 输入；`build.sh` 检查编译时源码有没有被 KSU 修改 |
+| `d8d99e8ad` | ci: 每天检查 KernelSU-Next、SUSFS、管理器的更新 | 新增 `ci/check_deps.sh` 和 `check-deps.yml`，有更新就开 Issue；KSU 有新提交时自动试编译并回复结果。`build-ksu.yml` 加 `ksu_ref`、`report_issue` 输入；`build.sh` 检查编译时源码有没有被 KSU 修改 |
+| （最新） | ci: 同时发布认官方 KernelSU-Next 管理器的刷机包 | `build.sh` 按 `VARIANTS` 编两遍内核，多出 `KernelSU-Next-` 开头的两个包（官方签名取自 KSU-Next `Kbuild`），一起上传 Artifact 和 Release；YouYouSU-Next 来不及跟进官方时可以先用官方管理器 |
 
 ### 历程
 

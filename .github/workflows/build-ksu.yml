@@ -1,5 +1,6 @@
 # 云编译一加 7/7T（sm8150）LineageOS 内核，加入 KernelSU-Next（manual hook）
-# + SUSFS，打包成 AnyKernel3 刷机包。
+# + SUSFS，打包成 AnyKernel3 刷机包。内核只认一种管理器签名，所以每次出两套包：
+# YouYouSU-Next 签名的和官方 KernelSU-Next 签名的（见 ci/build.sh 的 VARIANTS）。
 #
 # - push 到 lineage-24.0-ksu    → 编译，zip 上传为本次运行的 Artifact
 # - 在 Actions 页面手动运行     → 编译，可选先 rebase 到 LineageOS lineage-24.0
@@ -231,8 +232,7 @@ jobs:
         with:
           name: ${{ inputs.ksu_ref && 'ksu-test-' || '' }}${{ steps.build.outputs.zip_name || 'build-log' }}
           path: |
-            ${{ steps.build.outputs.zip }}
-            ${{ steps.build.outputs.zip_ota }}
+            ${{ runner.temp }}/work/dist/*.zip
             ${{ runner.temp }}/work/dist/ksu_susfs
             ${{ runner.temp }}/work/out/build.log
           if-no-files-found: warn
@@ -241,8 +241,10 @@ jobs:
         if: steps.build.outcome == 'success' && steps.plan.outputs.release == 'true'
         env:
           TAG: ${{ steps.plan.outputs.tag }}
-          ZIP: ${{ steps.build.outputs.zip }}
-          ZIP_OTA: ${{ steps.build.outputs.zip_ota }}
+          ZIP: ${{ steps.build.outputs.zip_youyou }}
+          ZIP_OTA: ${{ steps.build.outputs.zip_ota_youyou }}
+          ZIP_OFF: ${{ steps.build.outputs.zip_official }}
+          ZIP_OFF_OTA: ${{ steps.build.outputs.zip_ota_official }}
           RELEASE: ${{ steps.build.outputs.release }}
           SUSFS: ${{ steps.build.outputs.susfs_version }}
           REBASED: ${{ steps.plan.outputs.rebase }}
@@ -265,19 +267,26 @@ jobs:
             echo
             echo "### 下载哪个"
             echo
-            echo "两个包里的内核和 ksu_susfs 完全相同，区别只是刷到哪个槽位。"
+            echo "**先按手机上装的管理器选**：内核只认一种签名的管理器，刷错了管理器会显示未安装/不工作，换刷另一种包或换装对应的管理器即可，模块和设置都在 \`/data/adb\`，不会丢。"
+            echo
+            echo "| 管理器 | 用这个开头的包 |"
+            echo "|---|---|"
+            echo "| YouYouSU-Next（自签名） | \`YouYouSU-Next-...\` |"
+            echo "| 官方 [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) | \`KernelSU-Next-...\` |"
+            echo
+            echo "**再按刷入方式选**：同一种管理器的两个包内核和 ksu_susfs 完全相同，区别只是刷到哪个槽位。"
             echo
             echo "| 文件 | 刷入方式 | 什么时候用 |"
             echo "|---|---|---|"
-            echo "| \`$(basename "$ZIP")\` | **电脑 adb sideload**：Recovery → Apply update → Apply from ADB → \`adb sideload\` 本 zip<br>（系统没更新、只换内核时，也可以在管理器里“刷入 AnyKernel”） | 刷入**当前槽位**：首次刷入、root 丢了要恢复、只换内核 |"
-            echo "| \`$(basename "$ZIP_OTA")\` | **手机管理器 AnyKernel3 刷入**：YouYouSU-Next → 安装 → 刷入 AnyKernel (.zip) | 刷入**另一个槽位**：系统更新器装完 OTA、**还没重启**时用，刷完再重启，root 不丢 |"
+            echo "| \`$(basename "$ZIP")\`<br>\`$(basename "$ZIP_OFF")\` | **电脑 adb sideload**：Recovery → Apply update → Apply from ADB → \`adb sideload\` 本 zip<br>（系统没更新、只换内核时，也可以在管理器里“刷入 AnyKernel”） | 刷入**当前槽位**：首次刷入、root 丢了要恢复、只换内核 |"
+            echo "| \`$(basename "$ZIP_OTA")\`<br>\`$(basename "$ZIP_OFF_OTA")\` | **手机管理器 AnyKernel3 刷入**：管理器 → 安装 → 刷入 AnyKernel (.zip) | 刷入**另一个槽位**：系统更新器装完 OTA、**还没重启**时用，刷完再重启，root 不丢 |"
             echo
             echo "> ⚠️ OTA 包不要在 Recovery 里 sideload，也不要在没装 OTA 时刷，它会写到没在用的那个槽位。"
             echo "> 两个包刷入前都会自动对比版本后缀：和目标槽位系统自带的内核不一致就中止、不写入，并在日志里显示需要的后缀，按它下载或编译对应的包即可。"
             echo "> 想提前确认后缀：LineageOS 下载页该版本 \`build-manifest.xml\` 里 \`kernel_oneplus_sm8150\` 的 revision 前 12 位，或 OTA 装完后用 Kernel Flasher 查看另一个槽位。"
           } >notes.md
           # Release 的 tag 指向本分支原来的提交（云端 rebase 的结果没有推送）
-          gh release create "$TAG" "$ZIP" "$ZIP_OTA" -R "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" "$ZIP" "$ZIP_OTA" "$ZIP_OFF" "$ZIP_OFF_OTA" -R "$GITHUB_REPOSITORY" \
             --target "$BRANCH_HEAD" --title "$TAG (${RELEASE##*-perf-})" --notes-file notes.md
 
       # 试编译：不管成功失败，都把结果回复到 check-deps.yml 开的 Issue
