@@ -2017,7 +2017,12 @@ SYSCALL_DEFINE1(oldumount, char __user *, name)
 #endif
 
 #ifdef CONFIG_KSU
-/* Backport of can_umount()/path_umount() from v5.9 for KernelSU */
+/*
+ * KernelSU-Next：从 v5.9 移植 can_umount()/path_umount()。
+ * KSU 的“卸载模块”功能（对指定应用卸载模块挂载）在内核里直接卸载挂载点，
+ * 需要这个接口。KSU-Next 编译时用 grep 在本文件里查找 path_umount 的函数定义，
+ * 找到才会使用它（KSU_HAS_PATH_UMOUNT），所以函数定义的写法不要改。
+ */
 static int can_umount(const struct path *path, int flags)
 {
 	struct mount *mnt = real_mount(path->mnt);
@@ -2030,7 +2035,7 @@ static int can_umount(const struct path *path, int flags)
 		return -EINVAL;
 	if (!check_mnt(mnt))
 		return -EINVAL;
-	if (mnt->mnt.mnt_flags & MNT_LOCKED) /* Check optimistically */
+	if (mnt->mnt.mnt_flags & MNT_LOCKED) /* 先乐观检查一次，do_umount 里会再确认 */
 		return -EINVAL;
 	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -2046,7 +2051,7 @@ int path_umount(struct path *path, int flags)
 	if (!ret)
 		ret = do_umount(mnt, flags);
 
-	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
+	/* 不能用 path_put()，它会清掉 mnt_expiry_mark */
 	dput(path->dentry);
 	mntput_no_expire(mnt);
 	return ret;

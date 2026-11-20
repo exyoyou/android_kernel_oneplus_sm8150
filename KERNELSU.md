@@ -45,7 +45,7 @@
 | `drivers/input/input.c` | `ksu_handle_input_handle_event`（音量键安全模式） |
 | `kernel/reboot.c` | `ksu_handle_sys_reboot` |
 | `security/selinux/avc.c` | `ksu_handle_slow_avc_audit` |
-| `fs/namespace.c`、`fs/internal.h` | 从 v5.9 移植 `can_umount()`/`path_umount()`，供模块卸载挂载用 |
+| `fs/namespace.c`、`fs/internal.h` | 从 v5.9 移植 `can_umount()`/`path_umount()`，供模块卸载挂载用。KSU-Next 编译时 grep 本文件里的 `path_umount` 定义来决定是否使用它，函数定义的写法不要改 |
 | `include/linux/seccomp.h` | 新增 `filter_count` 字段，见下方“关键设计” |
 | `drivers/Kconfig`、`drivers/Makefile` | 接入 `drivers/kernelsu` |
 
@@ -61,8 +61,10 @@
    `ci/build.sh` 默认取“本分支与上游的 merge-base”的前 12 位，可以用 `PINNED_LOCALVERSION` 覆盖。编译完会检查后缀，不对就报错。
 
 2. **不能改变内核导出符号的 CRC。**
-   开启了 `MODVERSIONS`，厂商的预编译模块依赖符号 CRC。KSU 需要的 `seccomp.filter_count` 放在 `struct seccomp` 中 `mode` 后面的对齐空洞里，结构体大小和后续字段偏移都不变，再用 `#ifndef __GENKSYMS__` 对 genksyms 隐藏，CRC 也就不变。
-   以后加字段要遵循同样的原则。
+   开启了 `MODVERSIONS`，厂商的预编译模块依赖符号 CRC。
+   `seccomp.filter_count` 这个字段 4.14 上 KSU 运行时其实用不到，但 KSU-Next 编译时如果在 `include/linux/seccomp.h` 里找不到它，会自动用 sed 插入，而且不加 genksyms 保护，CRC 就变了。
+   所以手动加上：放在 `struct seccomp` 中 `mode` 后面的对齐空洞里，结构体大小和后续字段偏移都不变，再用 `#ifndef __GENKSYMS__` 对 genksyms 隐藏，CRC 也就不变。
+   以后加字段要遵循同样的原则。改完可以对比新旧 `vmlinux` 的 `__crc_*` 符号（`llvm-nm vmlinux | grep __crc_`）确认没变。
 
 3. **从手机的配置编译，不用 defconfig。**
    `ci/device_config` 是手机上正在运行的配置，`build.sh` 在它基础上打开 `KSU`、`KSU_MANUAL_HOOK`、`KSU_SUSFS`，关闭 `KSU_DEBUG`、`LOCALVERSION_AUTO`，再跑 `olddefconfig`。
@@ -187,7 +189,8 @@ cd .. && git add KernelSU-Next && git commit
 | `566a6a7b3` | fs: 加入 SUSFS v1.5.5 | 打入 susfs4ksu `77905b5a071e` 的内核补丁 |
 | `70bee9718` | ci: 用 GitHub Actions 云编译 KernelSU-Next + SUSFS 内核 | 加入 `ci/` 和工作流，最初用 clang r596125（从仓库 Release 下载精简包） |
 | `c1c04fa1c` | ci: 改用 AOSP 公开的 clang r547379 | r596125 来自 Android CI 内部构建，已无法匿名下载，改用 AOSP 公开的 r547379，删掉 `ci/pack_clang.sh`。已刷机测试通过 |
-| （本文档） | docs: 加入 KernelSU-Next + SUSFS 项目说明 | 新增本文档 |
+| `9b124b7ca` | docs: 加入 KernelSU-Next + SUSFS 项目说明 | 新增本文档和 CLAUDE.md |
+| （最新） | 注释: 给 KSU hook 和云编译脚本加中文注释 | 说明每个 hook 的作用。SUSFS 补丁文件保持原样，不加注释，方便以后整体替换升级。编译验证通过，符号 CRC 不变 |
 
 ### 历程
 

@@ -360,6 +360,10 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
  * switching the fsuid/fsgid around to the real ones.
  */
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next su 兼容：已授权的应用检查 /system/bin/su 是否存在时，
+ * 把路径换成 /system/bin/sh，让它认为 su 存在。
+ */
 extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
 				int *mode, int *flags);
 #endif

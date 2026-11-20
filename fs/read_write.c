@@ -430,6 +430,11 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
 EXPORT_SYMBOL(kernel_read);
 
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next：init 读取 init.rc 时，在内容后追加 KSU 自己的 rc 片段，
+ * 用来在开机各阶段拉起 ksud。只在开机早期生效，之后 ksu_init_rc_hook
+ * 置为 false。
+ */
 extern bool ksu_init_rc_hook __read_mostly;
 extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 			       size_t *count_ptr, loff_t **pos);

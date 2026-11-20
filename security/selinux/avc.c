@@ -762,6 +762,10 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
 }
 
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next：写 SELinux 拒绝日志时，把目标上下文里的 su 域替换成
+ * priv_app 域，避免应用通过 avc 日志发现 KSU。
+ */
 extern int ksu_handle_slow_avc_audit(u32 *tsid);
 #endif
 

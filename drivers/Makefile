@@ -193,4 +193,5 @@ obj-$(CONFIG_INFRARED_PROXIMITY)	+= infrared_proximity/
 obj-$(CONFIG_GNSS_SIRF)		+= gnsssirf/
 obj-$(CONFIG_GNSS)		+= gnss/
 
+# KernelSU-Next（drivers/kernelsu 软链接到 submodule KernelSU-Next/kernel）
 obj-$(CONFIG_KSU)		+= kernelsu/

@@ -69,6 +69,7 @@ extern int sb_prepare_remount_readonly(struct super_block *);
 
 extern void __init mnt_init(void);
 #ifdef CONFIG_KSU
+/* KernelSU-Next：从 v5.9 移植，实现在 fs/namespace.c，用于卸载模块挂载 */
 int path_umount(struct path *path, int flags);
 #endif
 

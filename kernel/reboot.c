@@ -270,6 +270,11 @@ EXPORT_SYMBOL_GPL(kernel_power_off);
 static DEFINE_MUTEX(reboot_mutex);
 
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next 的 supercall 入口：管理器和 ksud 用特定魔数调用 reboot
+ * 系统调用，向内核申请一个 KSU 通信用的 fd（之后通过 ioctl 和内核交互）。
+ * 魔数不对时直接返回，不影响正常重启。
+ */
 extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd,
 				 void __user **arg);
 #endif

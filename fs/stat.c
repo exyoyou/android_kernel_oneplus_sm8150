@@ -182,6 +182,14 @@ EXPORT_SYMBOL(vfs_statx_fd);
  * 0 will be returned on success, and a -ve error code if unsuccessful.
  */
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next：
+ * - ksu_handle_stat：su 兼容，已授权的应用 stat /system/bin/su 时换成
+ *   /system/bin/sh，让它认为 su 存在。
+ * - ksu_handle_newfstat_ret：配合 fs/read_write.c 的 init.rc 注入，
+ *   init 对 init.rc 做 fstat 时把文件大小加上追加内容的长度，
+ *   否则 init 只会读到原始长度。
+ */
 extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
 			   int *flags);
 extern void ksu_handle_newfstat_ret(unsigned int *fd,

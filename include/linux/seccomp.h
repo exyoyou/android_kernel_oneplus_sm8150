@@ -29,10 +29,14 @@ struct seccomp_filter;
 struct seccomp {
 	int mode;
 	/*
-	 * KernelSU: sits in the padding hole after @mode, so neither the size
-	 * of struct seccomp nor the offset of @filter changes. Hidden from
-	 * genksyms to keep symbol CRCs (MODVERSIONS) stable for the prebuilt
-	 * vendor modules.
+	 * KernelSU-Next：4.14 上 KSU 运行时并不使用这个字段（仍走
+	 * put_seccomp_filter），但 KSU-Next 编译时如果在本文件找不到
+	 * filter_count 字段，会自动用 sed 往这里插入同名字段，而且
+	 * 不加 genksyms 保护，导致导出符号的 CRC 变化，厂商预编译模块
+	 * （开启了 MODVERSIONS）就加载不了。所以手动加上：
+	 * - 放在 @mode 后面的对齐空洞里，struct seccomp 的大小和 @filter
+	 *   的偏移都不变；
+	 * - 用 __GENKSYMS__ 对 genksyms 隐藏，CRC 不变。
 	 */
 #ifndef __GENKSYMS__
 	atomic_t filter_count;

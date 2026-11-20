@@ -378,6 +378,11 @@ static int input_get_disposition(struct input_dev *dev,
 }
 
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next：开机早期统计音量下键，按满 3 次进入安全模式
+ * （禁用所有模块，用于模块导致无法开机时救砖）。ksud 在开机早期
+ * 检查完安全模式后就把 ksu_input_hook 置为 false，之后几乎没有开销。
+ */
 extern bool ksu_input_hook __read_mostly;
 extern int ksu_handle_input_handle_event(unsigned int *type,
 					 unsigned int *code, int *value);

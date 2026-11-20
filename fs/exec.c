@@ -1881,6 +1881,15 @@ out_ret:
 }
 
 #ifdef CONFIG_KSU
+/*
+ * KernelSU-Next 的 execve hook：
+ * - ksu_handle_execveat_ksud：识别 init 第二阶段和第一个 zygote 的启动，
+ *   完成 KSU 的初始化并触发 post-fs-data（ksud 挂载模块、执行
+ *   post-fs-data 脚本）。第一个 zygote 启动后 ksu_execveat_hook 就置为
+ *   false，不再调用。
+ * - ksu_handle_execveat_sucompat：已授权的应用执行 /system/bin/su 时，
+ *   改为执行 ksud，从而获得 root（su 兼容）。
+ */
 extern bool ksu_execveat_hook __read_mostly;
 extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
 				    struct user_arg_ptr *argv,
@@ -1900,9 +1909,8 @@ static int do_execveat_common(int fd, struct filename *filename,
 			ksu_handle_execveat_ksud(&fd, &filename, &argv, &envp,
 						 &flags);
 		/*
-		 * argv is passed as NULL on purpose: sucompat hands it to the
-		 * sulog code as a kernel string array, which a user_arg_ptr
-		 * is not.
+		 * argv 故意传 NULL：sucompat 会把它当作内核态字符串数组交给
+		 * sulog 记录，而这里的 user_arg_ptr 是用户态指针，类型不符。
 		 */
 		ksu_handle_execveat_sucompat(&fd, &filename, NULL, NULL, NULL);
 	}

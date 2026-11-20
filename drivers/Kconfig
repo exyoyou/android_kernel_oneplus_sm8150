@@ -227,6 +227,7 @@ source "drivers/esoc/Kconfig"
 
 source "drivers/infrared_proximity/Kconfig"
 
+# KernelSU-Next：drivers/kernelsu 是指向 ../KernelSU-Next/kernel 的软链接（submodule）
 source "drivers/kernelsu/Kconfig"
 
 endmenu

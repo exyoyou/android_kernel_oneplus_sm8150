@@ -724,6 +724,7 @@ CONFIG_CRYPTO_AES_ARM64_CE_CCM=y
 CONFIG_CRYPTO_AES_ARM64_CE_BLK=y
 CONFIG_CRYPTO_AES_ARM64_NEON_BLK=y
 
-# KernelSU-Next (manual hook)
+# KernelSU-Next：manual hook 方式（在内核源码里直接调用 hook，不依赖 kprobes）
+# 注意：云编译（ci/build.sh）以 ci/device_config 为配置，不使用这个 defconfig
 CONFIG_KSU=y
 CONFIG_KSU_MANUAL_HOOK=y
