@@ -26,7 +26,7 @@
 | `KernelSU-Next/` | submodule，KernelSU-Next 官方源码 |
 | `drivers/kernelsu` | 软链接 → `../KernelSU-Next/kernel` |
 | `fs/susfs.c`、`fs/susfs_ksu.c`、`include/linux/susfs*.h`、`fs/Kconfig.susfs` | SUSFS 主体 |
-| `ci/build.sh` | 编译脚本：内核 + ksu_susfs + AnyKernel3 zip，云端和本地通用 |
+| `ci/build.sh` | 编译脚本：内核 + ksu_susfs + AnyKernel3 zip（普通包和 `-OTA-inactive` 包），云端和本地通用 |
 | `ci/device_config` | 手机上 LineageOS 内核的配置（`adb shell zcat /proc/config.gz`），编译以它为起点 |
 | `ci/anykernel/anykernel.sh` | 刷机脚本：只换内核（`split_boot` + `flash_boot`），并把 ksu_susfs 装到 `/data/adb/ksu/bin` |
 | `ci/README.md` | 云编译的使用说明 |
@@ -188,20 +188,35 @@ ci/build.sh
 
 ### OTA 更新系统
 
-有电脑：
+每次编译出两个包，内核和 ksu_susfs 完全相同，只是刷入的槽位不同：
 
-1. 系统设置 → 更新器，安装 OTA 并重启（root 暂时消失）。
+| 文件 | 刷入方式 | 刷到哪 | 什么时候用 |
+|---|---|---|---|
+| `YouYouSU-Next-...-<日期>.zip` | 电脑 `adb sideload`（系统没更新时也可以用管理器“刷入 AnyKernel”） | 当前槽位 | 首次刷入、root 丢了要恢复、只换内核 |
+| `YouYouSU-Next-...-<日期>-OTA-inactive.zip` | 手机管理器“刷入 AnyKernel (.zip)” | 另一个槽位 | OTA 装完、还没重启时 |
+
+OTA 包只比普通包多 `anykernel.sh` 里的一行 `SLOT_SELECT=inactive;`（`ci/build.sh` 打包时插入），AnyKernel3 会把目标槽位 `_a`/`_b` 对调。
+它不能在 Recovery 里用，也不能在没装 OTA 时用，否则会写到没在用的槽位。
+管理器自带的“刷入 AnyKernel”只会刷当前槽位，OTA 后不重启就刷普通包，内核会进旧系统，重启后 root 就没了。
+
+只用手机（推荐，2026-11-21 从 1019 OTA 到 1116 实测通过）：
+
+1. 系统设置 → 更新器，安装 OTA，**装完先不要重启**。
+2. 确认新系统内核的版本后缀：Kernel Flasher 查看另一个槽位，或 root 终端运行 `strings /dev/block/by-name/boot_b | grep -m1 'Linux version'`（当前在 `_b` 就看 `boot_a`）。
+3. 在 Releases 下载后缀相同的 **`-OTA-inactive.zip`**。没有的话，手动运行工作流：勾选 `rebase_upstream`，`localversion` 填这个后缀。
+4. YouYouSU-Next → 安装 → 刷入 AnyKernel (.zip) → 选这个包。日志里应该写的是**另一个槽位**的 `by-name/boot_x`。
+5. 重启，root 保持不丢。
+
+有电脑（OTA 后已经重启、root 丢了时也用这个）：
+
+1. 更新器安装 OTA 并重启（root 暂时消失）。
 2. `adb shell uname -r` 查看新的后缀 `-gxxxxxxxxxxxx`。
-3. 在 Releases 下载文件名后缀相同的 zip。没有的话，手动运行工作流：勾选 `rebase_upstream`，`localversion` 填这个后缀。
+3. 在 Releases 下载后缀相同的**普通 zip**（不带 `-OTA-inactive`）。
 4. `adb reboot recovery` → Apply update → Apply from ADB → `adb sideload <zip>`。
 
-只用手机（需要 root 状态下的 Kernel Flasher）：
-
-1. 更新器安装 OTA，**先不要重启**。
-2. Kernel Flasher 查看另一个槽位的内核版本后缀，下载对应 zip，刷入**另一个槽位**。
-3. 重启，root 保持不丢。
-
 后缀对不上的表现：能开机、KSU 正常，但 WiFi 打不开。重刷后缀正确的 zip 就能恢复。
+
+GitHub Actions 的 Artifact 下载下来是外面又包了一层的 zip（里面是两个刷机包、`ksu_susfs`、`build.log`），要先解开，刷里面的包。Release 里的文件可以直接刷。
 
 ### 跟进 LineageOS 上游
 
@@ -256,10 +271,14 @@ cd .. && git add KernelSU-Next && git commit
 | `c1c04fa1c` | ci: 改用 AOSP 公开的 clang r547379 | r596125 来自 Android CI 内部构建，已无法匿名下载，改用 AOSP 公开的 r547379，删掉 `ci/pack_clang.sh`。已刷机测试通过 |
 | `9b124b7ca` | docs: 加入 KernelSU-Next + SUSFS 项目说明 | 新增本文档和 CLAUDE.md |
 | `1a0eabaa8` | 注释: 给 KSU hook 和云编译脚本加中文注释 | 说明每个 hook 的作用。SUSFS 相关文件不加注释（说明写在本文档“SUSFS 各文件的作用”），减少升级时的冲突。编译验证通过，符号 CRC 不变 |
-| （最新） | docs: 补充 SUSFS 各文件的作用 | 新增“SUSFS 各文件的作用”一节，含与 susfs4ksu 原版的 7 处差异和升级步骤 |
+| `4ef2b0f07` | docs: 补充 SUSFS 各文件的作用 | 新增“SUSFS 各文件的作用”一节，含与 susfs4ksu 原版的 7 处差异和升级步骤 |
+| `a76e2198f` | ci: zip 文件名里的时间改用北京时间 | GitHub 机器默认 UTC，生成文件名时指定 `TZ=Asia/Shanghai` |
+| （最新） | ci: 额外生成 OTA 后刷另一个槽位的刷机包 | 每次编译多出一个 `-OTA-inactive.zip`（`anykernel.sh` 多一行 `SLOT_SELECT=inactive;`），OTA 装完不重启就能在管理器里刷进新系统的槽位；Release 说明标注两个包的用法 |
 
 ### 历程
 
 - **2026-11-20**：在 LineageOS 24.0 内核（`9f007fac2`）上接入 KernelSU-Next legacy（manual hook），先只编译 KSU 测试，再加入 SUSFS v1.5.5。
   本地脚本 `build_ksu.sh` 用 clang r596125 编译。处理过三个问题：WiFi 模块 vermagic（固定版本后缀）、厂商模块 CRC（seccomp 字段藏进空洞并对 genksyms 隐藏）、管理器换成自签名的 YouYouSU-Next。
 - **2026-11-20**：KSU 和 SUSFS 拆成两个提交放到 `lineage-24.0-ksu`，加入 GitHub Actions 云编译。随后切到 AOSP 公开的 clang r547379，本地编译刷机测试正常。
+- **2026-11-21**：实测 OTA 流程。手机刷纯净的 24.0-20261019（内核 `-g0521dc291cf1`，是 `9f007fac2` 的父提交），刷对应后缀的 KSU 内核，再用更新器 OTA 到 20261116（`-g9f007fac27dc`），不重启，用管理器“刷入 AnyKernel”刷加了 `SLOT_SELECT=inactive` 的包，写入另一个槽位 `boot_a`，重启后 root、WiFi 正常。之后把这种包加进 CI。
+  经验：sideload 旧版本时必须先用同一版本的 boot.img 进 recovery，新版 recovery 会拒绝降级（只在手机屏幕上报错，电脑端看不出）；LineageOS 每个构建的内核提交可以从下载页的 `build-manifest.xml` 里查 `kernel/oneplus/sm8150` 的 revision。

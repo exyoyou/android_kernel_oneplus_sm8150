@@ -210,6 +210,7 @@ jobs:
           name: ${{ steps.build.outputs.zip_name || 'build-log' }}
           path: |
             ${{ steps.build.outputs.zip }}
+            ${{ steps.build.outputs.zip_ota }}
             ${{ runner.temp }}/work/dist/ksu_susfs
             ${{ runner.temp }}/work/out/build.log
           if-no-files-found: warn
@@ -219,6 +220,7 @@ jobs:
         env:
           TAG: ${{ steps.plan.outputs.tag }}
           ZIP: ${{ steps.build.outputs.zip }}
+          ZIP_OTA: ${{ steps.build.outputs.zip_ota }}
           RELEASE: ${{ steps.build.outputs.release }}
           SUSFS: ${{ steps.build.outputs.susfs_version }}
           REBASED: ${{ steps.plan.outputs.rebase }}
@@ -238,8 +240,19 @@ jobs:
             fi
             echo
             echo "版本后缀必须与手机上 LineageOS 内核一致（\`uname -r\` 末尾的 -gxxxxxxxxxxxx），否则 WiFi 模块无法加载。"
-            echo "刷入: Recovery → Apply update → \`adb sideload\` 本 zip。"
+            echo
+            echo "### 下载哪个"
+            echo
+            echo "两个包里的内核和 ksu_susfs 完全相同，区别只是刷到哪个槽位。"
+            echo
+            echo "| 文件 | 刷入方式 | 什么时候用 |"
+            echo "|---|---|---|"
+            echo "| \`$(basename "$ZIP")\` | **电脑 adb sideload**：Recovery → Apply update → Apply from ADB → \`adb sideload\` 本 zip<br>（系统没更新、只换内核时，也可以在管理器里“刷入 AnyKernel”） | 刷入**当前槽位**：首次刷入、root 丢了要恢复、只换内核 |"
+            echo "| \`$(basename "$ZIP_OTA")\` | **手机管理器 AnyKernel3 刷入**：YouYouSU-Next → 安装 → 刷入 AnyKernel (.zip) | 刷入**另一个槽位**：系统更新器装完 OTA、**还没重启**时用，刷完再重启，root 不丢 |"
+            echo
+            echo "> ⚠️ OTA 包不要在 Recovery 里 sideload，也不要在没装 OTA 时刷，它会写到没在用的那个槽位。"
+            echo "> OTA 装完后先确认新系统内核的版本后缀（Kernel Flasher 查看另一个槽位，或 root 终端运行 \`strings /dev/block/by-name/boot_a | grep -m1 'Linux version'\`，当前在 \`_a\` 就改成 \`boot_b\`），再下载后缀相同的包。"
           } >notes.md
           # Release 的 tag 指向本分支原来的提交（云端 rebase 的结果没有推送）
-          gh release create "$TAG" "$ZIP" -R "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" "$ZIP" "$ZIP_OTA" -R "$GITHUB_REPOSITORY" \
             --target "$BRANCH_HEAD" --title "$TAG (${RELEASE##*-perf-})" --notes-file notes.md

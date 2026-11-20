@@ -35,6 +35,7 @@ supported.vendorpatchlevels=
 
 ### AnyKernel install
 # boot 分区参数：A/B 设备，自动选择当前槽位的 boot
+# （ci/build.sh 打 -OTA-inactive 包时会在 IS_SLOT_DEVICE 下面插入 SLOT_SELECT=inactive;，改刷另一个槽位）
 BLOCK=boot;
 IS_SLOT_DEVICE=1;
 RAMDISK_COMPRESSION=auto;

@@ -161,11 +161,24 @@ ZIP_NAME=YouYouSU-Next-legacy-SUSFS-$SUSFS_VERSION-guacamole-${RELEASE##*-perf-}
 (cd "$ak3" && zip -qr9 "$DIST/$ZIP_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
 echo "刷机包: $DIST/$ZIP_NAME"
 
+# OTA 专用包：与普通包只差 anykernel.sh 里的一行 SLOT_SELECT=inactive，
+# AnyKernel3 会把目标从当前槽位换成另一个槽位。用于 OTA 装完、还没重启时，
+# 在管理器里“刷入 AnyKernel”，把内核写进新系统所在的槽位，重启后 root 不丢。
+ZIP_OTA_NAME=${ZIP_NAME%.zip}-OTA-inactive.zip
+sed -i 's/^IS_SLOT_DEVICE=1;$/&\n# OTA 专用包：写入非活动槽位（由 ci\/build.sh 插入）\nSLOT_SELECT=inactive;/' "$ak3/anykernel.sh"
+if [ "$(grep -cx 'SLOT_SELECT=inactive;' "$ak3/anykernel.sh")" != 1 ]; then
+	echo "生成 OTA 包失败：anykernel.sh 里找不到 IS_SLOT_DEVICE=1; 这一行" >&2
+	exit 1
+fi
+(cd "$ak3" && zip -qr9 "$DIST/$ZIP_OTA_NAME" . -x '.git*' -x '.github/*' -x 'README.md')
+echo "OTA 刷机包: $DIST/$ZIP_OTA_NAME"
+
 # 给工作流后续步骤用：输出 zip 路径、版本等信息
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
 	{
 		echo "zip=$DIST/$ZIP_NAME"
 		echo "zip_name=$ZIP_NAME"
+		echo "zip_ota=$DIST/$ZIP_OTA_NAME"
 		echo "release=$RELEASE"
 		echo "susfs_version=$SUSFS_VERSION"
 	} >>"$GITHUB_OUTPUT"
