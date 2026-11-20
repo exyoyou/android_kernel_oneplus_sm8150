@@ -69,6 +69,13 @@ struct vfsmount {
 	struct super_block *mnt_sb;	/* pointer to superblock */
 	int mnt_flags;
 	void *data;
+	/*
+	 * SUSFS: hidden from genksyms so that symbol CRCs (MODVERSIONS) stay
+	 * compatible with the prebuilt vendor modules.
+	 */
+#if defined(CONFIG_KSU_SUSFS) && !defined(__GENKSYMS__)
+	u64 susfs_mnt_id_backup;
+#endif
 } __randomize_layout;
 
 struct file; /* forward dec */

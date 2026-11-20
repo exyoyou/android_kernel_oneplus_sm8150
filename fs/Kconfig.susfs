@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# SUSFS v1.5.5 (kernel-4.14 branch of susfs4ksu), wired to KernelSU-Next
+# legacy through fs/susfs_ksu.c instead of patching KernelSU itself.
+#
+
+menu "KernelSU - SUSFS"
+
+config KSU_SUSFS
+	bool "KernelSU addon - SUSFS"
+	depends on KSU=y && SECURITY_SELINUX
+	default y
+	help
+	  Patch and enable SUSFS (root hiding) for KernelSU-Next.
+	  Userspace talks to it with the ksu_susfs tool (prctl interface).
+
+config KSU_SUSFS_HAS_MAGIC_MOUNT
+	bool "KernelSU uses magic mount"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Every mount from /debug_ramdisk/workdir is treated as a magic mount
+	  and handled by the AUTO_ADD_ features.
+
+config KSU_SUSFS_SUS_PATH
+	bool "Hide suspicious paths"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Hide paths added with 'ksu_susfs add_sus_path' from non-root
+	  user apps.
+
+config KSU_SUSFS_SUS_MOUNT
+	bool "Hide suspicious mounts"
+	depends on KSU_SUSFS
+	default y
+	help
+	  Hide mounts made by KernelSU from /proc/self/[mounts|mountinfo|
+	  mountstat] of non-root processes.
+
+config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+	bool "Hide KernelSU default mounts automatically"
+	depends on KSU_SUSFS_SUS_MOUNT
+	default y
+
+config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+	bool "Hide bind mounts made by KernelSU automatically"
+	depends on KSU_SUSFS_SUS_MOUNT
+	default y
+
+config KSU_SUSFS_SUS_KSTAT
+	bool "Spoof kstat of suspicious files"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_SUS_OVERLAYFS
+	bool "Spoof kstat/kstatfs of overlayed files automatically"
+	depends on KSU_SUSFS
+	default n
+
+config KSU_SUSFS_TRY_UMOUNT
+	bool "Umount paths added with 'ksu_susfs add_try_umount' for apps"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+	bool "Add KernelSU bind mounts to try_umount automatically"
+	depends on KSU_SUSFS_TRY_UMOUNT
+	default y
+
+config KSU_SUSFS_SPOOF_UNAME
+	bool "Spoof uname"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_ENABLE_LOG
+	bool "Allow SUSFS to log to the kernel log"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+	bool "Hide ksu and susfs symbols from /proc/kallsyms"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+	bool "Spoof /proc/cmdline"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_OPEN_REDIRECT
+	bool "Redirect opening of a path to another path (experimental)"
+	depends on KSU_SUSFS
+	default y
+
+endmenu

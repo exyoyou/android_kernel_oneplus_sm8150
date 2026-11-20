@@ -612,8 +612,26 @@ static int s_show(struct seq_file *m, void *p)
 		seq_printf(m, "%pK %c %s\t[%s]\n", (void *)iter->value,
 			   type, iter->name, iter->module_name);
 	} else
+
+#ifndef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
 		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
 			   iter->type, iter->name);
+#else
+	{
+		/*
+		 * Substring matches, so LTO-renamed locals such as
+		 * "__func__.susfs_init.llvm.123" and "kernelsu_init" are
+		 * caught too. Plain "ksu" is not used: it matches "cksum".
+		 */
+		if (strstr(iter->name, "ksu_") || strstr(iter->name, "susfs") ||
+		    strstr(iter->name, "kernelsu") || strstr(iter->name, "ksud") ||
+		    strstr(iter->name, "ksuver")) {
+			return 0;
+		}
+		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
+			   iter->type, iter->name);
+	}
+#endif
 	return 0;
 }
 

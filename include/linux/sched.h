@@ -1377,6 +1377,14 @@ struct task_struct {
 	 * New fields for task_struct should be added above here, so that
 	 * they are included in the randomized portion of task_struct.
 	 */
+	/*
+	 * SUSFS: hidden from genksyms so that symbol CRCs (MODVERSIONS) stay
+	 * compatible with the prebuilt vendor modules.
+	 */
+#if defined(CONFIG_KSU_SUSFS) && !defined(__GENKSYMS__)
+	u64 susfs_task_state;
+	u64 susfs_last_fake_mnt_id;
+#endif
 	randomized_struct_fields_end
 
 	/* CPU-specific state of this task: */
