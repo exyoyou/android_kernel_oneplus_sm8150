@@ -1,0 +1,245 @@
+# Cloud build of the OnePlus 7/7T (sm8150) LineageOS kernel with
+# KernelSU-Next (manual hook) + SUSFS, packed as an AnyKernel3 zip.
+#
+# - push to lineage-24.0-ksu  -> build, zip uploaded as a workflow artifact
+# - manual run (Actions tab)  -> build, optionally rebased onto the latest
+#                                LineageOS lineage-24.0, published as a Release
+# - daily schedule            -> if LineageOS lineage-24.0 has new commits,
+#                                rebase onto it, build and publish a Release.
+#                                A rebase conflict fails the run (GitHub mails
+#                                you); the branch itself is never pushed to.
+#                                Schedules only run from the repository's
+#                                default branch, so make lineage-24.0-ksu the
+#                                default branch to enable this.
+#
+# One-time setup: upload the toolchain made by ci/pack_clang.sh as asset
+# clang-r596125-slim.tar.zst of a release tagged toolchain-clang-r596125.
+name: Build KSU kernel
+
+on:
+  push:
+    branches: [lineage-24.0-ksu]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+    inputs:
+      rebase_upstream:
+        description: 先 rebase 到 LineageOS 上游最新提交再编译（只在云端，不推送分支）
+        type: boolean
+        default: false
+      localversion:
+        description: 手动指定版本后缀，如 -g9f007fac27dc（留空 = 用所基于的上游提交自动计算）
+        type: string
+        default: ''
+      release:
+        description: 发布为 GitHub Release（否则只上传 Artifact）
+        type: boolean
+        default: true
+  schedule:
+    - cron: '0 20 * * *' # 每天北京时间 04:00
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ksu
+  cancel-in-progress: false
+
+env:
+  KSU_BRANCH: lineage-24.0-ksu
+  UPSTREAM_URL: https://github.com/LineageOS/android_kernel_oneplus_sm8150.git
+  UPSTREAM_BRANCH: lineage-24.0
+  CLANG_NAME: clang-r596125
+  # Override with repository variables CLANG_URL / CLANG_SHA256 to use
+  # another toolchain tarball.
+  CLANG_URL: ${{ vars.CLANG_URL }}
+  CLANG_SHA256: ${{ vars.CLANG_SHA256 || 'ec3a13d3d0e4414bd5fa925a00931eda2be090343070df47779533f16cfc4b46' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && env.KSU_BRANCH || github.sha }}
+          fetch-depth: 100
+
+      - name: Find LineageOS base
+        id: base
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch -q --no-tags --depth=100 upstream \
+            "$UPSTREAM_BRANCH:refs/remotes/upstream/$UPSTREAM_BRANCH"
+          up_ref=upstream/$UPSTREAM_BRANCH
+          # Both sides are shallow; deepen until they meet.
+          for d in 500 5000; do
+            git merge-base HEAD "$up_ref" >/dev/null 2>&1 && break
+            git fetch -q --no-tags --deepen=$d origin "$(git rev-parse HEAD)"
+            git fetch -q --no-tags --deepen=$d upstream "$UPSTREAM_BRANCH"
+          done
+          base=$(git merge-base HEAD "$up_ref")
+          up=$(git rev-parse "$up_ref")
+          head=$(git rev-parse HEAD)
+          echo "branch head:      $head"
+          echo "based on LineageOS $base"
+          echo "LineageOS latest:  $up"
+          {
+            echo "base=$base"
+            echo "up=$up"
+            echo "head=$head"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Decide what to do
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_REBASE: ${{ inputs.rebase_upstream }}
+          IN_RELEASE: ${{ inputs.release }}
+          BASE: ${{ steps.base.outputs.base }}
+          UP: ${{ steps.base.outputs.up }}
+          HEAD_SHA: ${{ steps.base.outputs.head }}
+        run: |
+          build=true rebase=false release=false
+          tag=build-${GITHUB_RUN_NUMBER}
+          case $EVENT in
+          workflow_dispatch)
+            [ "$IN_REBASE" = true ] && [ "$UP" != "$BASE" ] && rebase=true
+            [ "$IN_RELEASE" = true ] && release=true
+            ;;
+          schedule)
+            tag=auto-g${UP:0:12}-${HEAD_SHA:0:12}
+            release=true
+            if [ "$UP" = "$BASE" ]; then
+              echo "LineageOS has nothing new; skipping"
+              build=false
+            elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+              echo "already built $tag; skipping"
+              build=false
+            else
+              rebase=true
+            fi
+            ;;
+          esac
+          echo "build=$build rebase=$rebase release=$release tag=$tag"
+          {
+            echo "build=$build"
+            echo "rebase=$rebase"
+            echo "release=$release"
+            echo "tag=$tag"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Rebase onto LineageOS ${{ env.UPSTREAM_BRANCH }}
+        if: steps.plan.outputs.build == 'true' && steps.plan.outputs.rebase == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git rebase "upstream/$UPSTREAM_BRANCH"; then
+            echo "::error::LineageOS 上游的新提交与 KSU/SUSFS 改动冲突，需要在本地手动 rebase 解决："
+            git status --short | grep -E '^(UU|AA|DU|UD) ' || true
+            git rebase --abort
+            exit 1
+          fi
+          git log --oneline "upstream/$UPSTREAM_BRANCH~1..HEAD"
+
+      - name: Install build dependencies
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex cpio zip zstd
+          # LTO needs room; drop toolchains this build does not use.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout KernelSU-Next
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          # Full history and tags: KernelSU-Next derives its version number
+          # (shown in the manager) from them.
+          git submodule update --init KernelSU-Next
+          git -C KernelSU-Next fetch -q --tags origin
+          git -C KernelSU-Next describe --tags
+
+      - name: Restore clang
+        if: steps.plan.outputs.build == 'true'
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/clang
+          key: ${{ env.CLANG_NAME }}-${{ env.CLANG_SHA256 }}
+
+      - name: Download clang
+        if: steps.plan.outputs.build == 'true' && steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          f=$RUNNER_TEMP/clang.tar.zst
+          if [ -n "$CLANG_URL" ]; then
+            curl -fL --retry 3 -o "$f" "$CLANG_URL"
+          else
+            gh release download "toolchain-$CLANG_NAME" -R "$GITHUB_REPOSITORY" \
+              -p "$CLANG_NAME-slim.tar.zst" -O "$f"
+          fi
+          echo "$CLANG_SHA256  $f" | sha256sum -c -
+          mkdir -p ~/clang
+          tar -C ~/clang -xf "$f"
+
+      - name: Set up NDK
+        if: steps.plan.outputs.build == 'true'
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27
+          link-to-sdk: false
+
+      - name: Build
+        if: steps.plan.outputs.build == 'true'
+        id: build
+        env:
+          CLANG_DIR: /home/runner/clang/${{ env.CLANG_NAME }}
+          NDK: ${{ steps.ndk.outputs.ndk-path }}
+          WORK: ${{ runner.temp }}/work
+          PINNED_LOCALVERSION: ${{ inputs.localversion }}
+          # after a rebase the merge-base moves to the new LineageOS head
+          UPSTREAM_REF: upstream/${{ env.UPSTREAM_BRANCH }}
+        run: ci/build.sh
+
+      - name: Upload artifact
+        if: steps.plan.outputs.build == 'true' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.zip_name || 'build-log' }}
+          path: |
+            ${{ steps.build.outputs.zip }}
+            ${{ runner.temp }}/work/dist/ksu_susfs
+            ${{ runner.temp }}/work/out/build.log
+          if-no-files-found: warn
+
+      - name: Publish release
+        if: steps.build.outcome == 'success' && steps.plan.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          ZIP: ${{ steps.build.outputs.zip }}
+          RELEASE: ${{ steps.build.outputs.release }}
+          SUSFS: ${{ steps.build.outputs.susfs_version }}
+          REBASED: ${{ steps.plan.outputs.rebase }}
+          BRANCH_HEAD: ${{ steps.base.outputs.head }}
+        run: |
+          ksu=$(git -C KernelSU-Next describe --tags)
+          base=$(git merge-base HEAD "upstream/$UPSTREAM_BRANCH")
+          {
+            echo "**内核版本**: \`$RELEASE\`"
+            echo "**KernelSU-Next**: \`$ksu\`  **SUSFS**: \`$SUSFS\`"
+            echo "**基于 LineageOS**: [\`${base:0:12}\`]($UPSTREAM_URL/commit/$base)"
+            echo "**本仓库提交**: \`${BRANCH_HEAD:0:12}\`"
+            if [ "$REBASED" = true ]; then
+              echo
+              echo "> 本次在云端自动 rebase 到了 LineageOS 最新提交，分支本身没有改动。"
+              echo "> 本地同步: \`git fetch upstream && git rebase upstream/$UPSTREAM_BRANCH && git push -f\`"
+            fi
+            echo
+            echo "版本后缀必须与手机上 LineageOS 内核一致（\`uname -r\` 末尾的 -gxxxxxxxxxxxx），否则 WiFi 模块无法加载。"
+            echo "刷入: Recovery → Apply update → \`adb sideload\` 本 zip。"
+          } >notes.md
+          gh release create "$TAG" "$ZIP" -R "$GITHUB_REPOSITORY" \
+            --target "$BRANCH_HEAD" --title "$TAG (${RELEASE##*-perf-})" --notes-file notes.md
