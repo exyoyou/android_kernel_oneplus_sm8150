@@ -81,7 +81,7 @@
 | `fs/readdir.c` | `SUS_PATH` | 列目录（`filldir` 系列）时不返回隐藏的条目 |
 | `fs/stat.c` | `SUS_KSTAT` | `generic_fillattr` 中对标记的文件返回伪造的 ino、dev 等，让被替换的文件看起来像原文件 |
 | `fs/proc/task_mmu.c` | `SUS_KSTAT` | `/proc/<pid>/maps` 中伪造被标记文件的 dev、ino |
-| `fs/namespace.c` | `SUS_MOUNT`、`TRY_UMOUNT`、`AUTO_ADD_*` | KSU 创建的挂载从单独的号段分配 mnt_id，不在普通挂载的编号里留下空洞；自动把 KSU 默认挂载和 bind mount 加入隐藏列表、try_umount 列表；zygote 复制挂载命名空间时的处理 |
+| `fs/namespace.c` | `SUS_MOUNT`、`TRY_UMOUNT`、`AUTO_ADD_*` | KSU 创建的挂载从单独的号段分配 mnt_id，不在普通挂载的编号里留下空洞；自动把 KSU 默认挂载和全局命名空间里的 bind mount 加入隐藏列表、try_umount 列表；zygote 复制挂载命名空间时的处理 |
 | `fs/proc_namespace.c` | `SUS_MOUNT` | `/proc/<pid>/mounts`、`mountinfo`、`mountstats` 中不显示隐藏的挂载 |
 | `fs/proc/fd.c` | `SUS_MOUNT` | `/proc/<pid>/fdinfo` 里的 mnt_id 改为伪造值 |
 | `fs/notify/fdinfo.c` | `SUS_MOUNT` | inotify 的 fdinfo 里隐藏相关挂载信息 |
@@ -112,11 +112,12 @@
    - `fs/statfs.c` 对 `susfs_def.h` 和 `mount.h` 的 include 也对 genksyms 隐藏，否则 `vfs_statfs()` 原型里类型的展开方式会变，CRC 跟着变。
 6. **`kernel/kallsyms.c`**：原版只匹配 `ksu_` 和以 `susfs_`、`ksud` 开头的名字。这里改成子串匹配，并加了 `kernelsu`、`ksuver`，这样 LTO 改过名的局部符号（如 `__func__.susfs_init.llvm.123`）也能藏住。不用单独的 `ksu`，因为它会误伤 `cksum`。
 7. **`fs/proc/cmdline.c`、`fs/proc/task_mmu.c`**：原版补丁在这两个文件上打不上（上下文与本内核不同），是手动按原意移植的。
+8. **`fs/namespace.c` 的 `do_loopback()`**：原版只要是 ksu 域的进程做 bind mount，就自动隐藏并加入全局 try_umount 列表，不管在哪个挂载命名空间里做。这里加了 `susfs_is_current_mnt_ns_global()`，只处理全局挂载命名空间（pid 1 当前所在的那个，不是 `init_task` 的：Android init 开机后会从 bootstrap 命名空间切到 default 命名空间）里的 bind mount。否则 root 在某个应用命名空间里 bind 到 `/data/data` 这类通用路径，之后所有应用启动时都会卸掉自己的同名挂载，直到重启（见 MULTIUSER.md 第 4 条）。KSU 模块的挂载都在全局命名空间里做，不受影响。
 
 ### 升级 SUSFS 的步骤
 
 1. 在 KSU 提交（只含 KSU、不含 SUSFS 的状态）上打新版 `50_add_susfs_in_kernel-4.14.patch`，复制新版的 `fs/susfs.c`、`include/linux/susfs*.h`。
-2. 把上面 7 处差异重做一遍。`fs/susfs_ksu.c` 要对照新版 `10_enable_susfs_for_ksu.patch` 的变化同步修改（比如新增的命令）。
+2. 把上面 8 处差异重做一遍。`fs/susfs_ksu.c` 要对照新版 `10_enable_susfs_for_ksu.patch` 的变化同步修改（比如新增的命令）。
 3. 改 `ci/build.sh` 里的 `SUSFS_COMMIT`。
 4. 编译，对比新旧 `vmlinux` 的 `__crc_*` 符号确认 CRC 没变，再刷机测试。刷完记得更新手机上的 `ksu_susfs`。
 
@@ -274,7 +275,7 @@ cd .. && git add KernelSU-Next && git commit
 
 ### 升级 SUSFS
 
-见上面“SUSFS 各文件的作用 → 升级 SUSFS 的步骤”。注意本项目的 SUSFS 有 7 处与原版不同，不能直接整体替换。
+见上面“SUSFS 各文件的作用 → 升级 SUSFS 的步骤”。注意本项目的 SUSFS 有 8 处与原版不同，不能直接整体替换。
 刷完后 ksu_susfs 也要更新（刷机脚本会装，Lineage Recovery 下需要 `push_ksu_susfs.sh`）。
 
 ### LineageOS 大版本升级（如 24 → 25）
@@ -303,7 +304,8 @@ cd .. && git add KernelSU-Next && git commit
 | `4a51b6ffc` | ci: 额外生成 OTA 后刷另一个槽位的刷机包 | 每次编译多出一个 `-OTA-inactive.zip`（`anykernel.sh` 多一行 `SLOT_SELECT=inactive;`），OTA 装完不重启就能在管理器里刷进新系统的槽位；Release 说明标注两个包的用法 |
 | `6adefda45` | ci: 刷入前自动检查内核版本后缀 | `anykernel.sh` 在写入前对比目标槽位官方内核和包里内核的版本，不一致就中止并提示需要的后缀，避免刷完 WiFi 打不开 |
 | `d8d99e8ad` | ci: 每天检查 KernelSU-Next、SUSFS、管理器的更新 | 新增 `ci/check_deps.sh` 和 `check-deps.yml`，有更新就开 Issue；KSU 有新提交时自动试编译并回复结果。`build-ksu.yml` 加 `ksu_ref`、`report_issue` 输入；`build.sh` 检查编译时源码有没有被 KSU 修改 |
-| （最新） | ci: 同时发布认官方 KernelSU-Next 管理器的刷机包 | `build.sh` 按 `VARIANTS` 编两遍内核，多出 `KernelSU-Next-` 开头的两个包（官方签名取自 KSU-Next `Kbuild`），一起上传 Artifact 和 Release；YouYouSU-Next 来不及跟进官方时可以先用官方管理器 |
+| `0d70a1ac3` | ci: 同时发布认官方 KernelSU-Next 管理器的刷机包 | `build.sh` 按 `VARIANTS` 编两遍内核，多出 `KernelSU-Next-` 开头的两个包（官方签名取自 KSU-Next `Kbuild`），一起上传 Artifact 和 Release；YouYouSU-Next 来不及跟进官方时可以先用官方管理器 |
+| （最新） | fs: SUSFS 只自动处理全局挂载命名空间里的 bind mount | `do_loopback()` 加命名空间判断（与原版的第 8 处差异），避免应用命名空间里的 bind mount 被加进全局 try_umount 列表。编译验证通过，符号 CRC 不变 |
 
 ### 历程
 

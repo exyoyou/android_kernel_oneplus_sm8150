@@ -60,6 +60,38 @@ extern void susfs_auto_add_try_umount_for_bind_mount(struct path *path);
 bool susfs_is_auto_add_try_umount_for_bind_mount_enabled = true;
 #endif
 
+#if defined(CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT) || defined(CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT)
+#ifndef __GENKSYMS__
+#include <linux/nsproxy.h>
+#include <linux/pid.h>
+#include <linux/pid_namespace.h>
+#endif
+/*
+ * 自动隐藏 bind mount、自动加入 try_umount 列表只针对全局挂载命名空间。
+ * root 进程在某个应用自己的命名空间里做的 bind mount 只影响那个应用，
+ * 不应该把挂载点加进全局 try_umount 列表，让之后每个应用启动时都去卸载它。
+ * 全局命名空间取 pid 1（init）当前所在的那个：Android init 开机后会从内核
+ * 最初的 bootstrap 命名空间（init_task 的）切到 default 命名空间，
+ * KSU 模块的挂载都在后者里完成。
+ */
+static bool susfs_is_current_mnt_ns_global(void)
+{
+	struct task_struct *init;
+	bool ret = false;
+
+	rcu_read_lock();
+	init = pid_task(find_pid_ns(1, &init_pid_ns), PIDTYPE_PID);
+	if (init) {
+		task_lock(init);
+		if (init->nsproxy)
+			ret = init->nsproxy->mnt_ns == current->nsproxy->mnt_ns;
+		task_unlock(init);
+	}
+	rcu_read_unlock();
+	return ret;
+}
+#endif
+
 /* Maximum number of mounts in a mount namespace */
 unsigned int sysctl_mount_max __read_mostly = 100000;
 
@@ -2600,7 +2632,7 @@ static int do_loopback(struct path *path, const char *old_name,
 #if defined(CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT) || defined(CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT)
 	// Check if bind mounted path should be hidden and umounted automatically.
 	// And we target only process with ksu domain.
-	if (susfs_is_current_ksu_domain()) {
+	if (susfs_is_current_ksu_domain() && susfs_is_current_mnt_ns_global()) {
 #if defined(CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT)
 		if (susfs_is_auto_add_sus_bind_mount_enabled &&
 				susfs_auto_add_sus_bind_mount(old_name, &old_path)) {
